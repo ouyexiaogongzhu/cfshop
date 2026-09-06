@@ -1,0 +1,13 @@
+packages:
+  - worker
+  - apps/*
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
+  workerd: true
+# vitest-pool-workers pins an older miniflare; force the same one wrangler 4.x uses
+# so local workerd supports the project compatibility_date.
+overrides:
+  miniflare: 5.20260903.0-alpha
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20260905.1'

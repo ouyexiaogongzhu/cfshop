@@ -1,0 +1,10 @@
+node_modules/
+.wrangler/
+.dev.vars
+.next/
+.open-next/
+.nitro/
+dist/
+coverage/
+*.tsbuildinfo
+.DS_Store

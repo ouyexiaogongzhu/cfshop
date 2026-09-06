@@ -1,0 +1,16 @@
+{
+  "name": "cfshop",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @cfshop/worker dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate:local": "pnpm --filter @cfshop/worker db:migrate:local",
+    "db:seed": "pnpm --filter @cfshop/worker db:seed",
+    "deploy:dry": "pnpm --filter @cfshop/worker deploy:dry"
+  }
+}

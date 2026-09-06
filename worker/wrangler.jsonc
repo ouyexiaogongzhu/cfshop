@@ -1,0 +1,153 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cfshop-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cfshop-db",
+      // placeholder-local: real database_id is created and filled in at first deploy.
+      "database_id": "placeholder-local",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "MEDIA",
+      "bucket_name": "cfshop-media"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "CACHE",
+      "id": "placeholder-local"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "QUEUE",
+        "queue_name": "order-events"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "order-events",
+        "max_batch_size": 10,
+        "max_retries": 3,
+        "dead_letter_queue": "order-events-dlq"
+      }
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "CART_DO", "class_name": "CartDO" },
+      { "name": "INVENTORY_DO", "class_name": "InventoryDO" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CartDO", "InventoryDO"]
+    }
+  ],
+  // Wrangler env inheritance: bindings and most resource blocks are NOT inherited
+  // from the top level — each env must redeclare what it needs.
+  "env": {
+    // Real resource ids are created and filled in at first deploy.
+    "staging": {
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cfshop-db-staging",
+          "database_id": "placeholder-local",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "MEDIA",
+          "bucket_name": "cfshop-media-staging"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CACHE",
+          "id": "placeholder-local"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "QUEUE",
+            "queue_name": "order-events-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "order-events-staging",
+            "max_batch_size": 10,
+            "max_retries": 3,
+            "dead_letter_queue": "order-events-dlq-staging"
+          }
+        ]
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "CART_DO", "class_name": "CartDO" },
+          { "name": "INVENTORY_DO", "class_name": "InventoryDO" }
+        ]
+      }
+    },
+    "production": {
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "cfshop-db-production",
+          "database_id": "placeholder-local",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "MEDIA",
+          "bucket_name": "cfshop-media-production"
+        }
+      ],
+      "kv_namespaces": [
+        {
+          "binding": "CACHE",
+          "id": "placeholder-local"
+        }
+      ],
+      "queues": {
+        "producers": [
+          {
+            "binding": "QUEUE",
+            "queue_name": "order-events-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "order-events-production",
+            "max_batch_size": 10,
+            "max_retries": 3,
+            "dead_letter_queue": "order-events-dlq-production"
+          }
+        ]
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "CART_DO", "class_name": "CartDO" },
+          { "name": "INVENTORY_DO", "class_name": "InventoryDO" }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # Plain install (not --frozen-lockfile) until the lockfile is stable.
+      - run: pnpm install
+
+      - run: pnpm --filter @cfshop/worker typecheck
+
+      - run: pnpm --filter @cfshop/worker test
+
+      # Dry-run needs no Cloudflare account/auth. CI must NOT deploy: the
+      # project is on the Workers FREE plan (deploys require an upgrade).
+      # Real deploy steps activate once CLOUDFLARE_API_TOKEN is added as a
+      # repo secret and the account is upgraded.
+      - run: pnpm --filter @cfshop/worker deploy:dry
