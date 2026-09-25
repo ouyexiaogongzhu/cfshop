@@ -5,9 +5,14 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  ci:
+  check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -18,15 +23,77 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
 
-      # Plain install (not --frozen-lockfile) until the lockfile is stable.
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
 
       - run: pnpm --filter @cfshop/worker typecheck
 
       - run: pnpm --filter @cfshop/worker test
 
-      # Dry-run needs no Cloudflare account/auth. CI must NOT deploy: the
-      # project is on the Workers FREE plan (deploys require an upgrade).
-      # Real deploy steps activate once CLOUDFLARE_API_TOKEN is added as a
-      # repo secret and the account is upgraded.
+      # Packages only. No account, no remote resources.
       - run: pnpm --filter @cfshop/worker deploy:dry
+
+      - run: pnpm --filter cfshop-storefront exec next typegen
+      - run: pnpm --filter cfshop-storefront exec tsc --noEmit
+
+  deploy:
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Require a Cloudflare token
+        id: auth
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CLOUDFLARE_API_TOKEN is not set. Skipped deploy of cfshop-api and cfshop-storefront."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Deploy targets are pinned to cfshop names so this workflow cannot
+      # publish rfplay-api or the rfplay Pages projects.
+      - name: Deploy cfshop-api
+        if: steps.auth.outputs.enabled == 'true'
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: d3376ef411a0e5f321acb1ee848d2ec1
+        run: |
+          grep -q '"name": "cfshop-api"' wrangler.jsonc
+          if grep -Eq '"name"[[:space:]]*:[[:space:]]*"rfplay' wrangler.jsonc; then
+            echo "refusing to deploy an rfplay worker" >&2
+            exit 1
+          fi
+          pnpm exec wrangler d1 migrations apply DB --remote
+          pnpm exec wrangler deploy --name cfshop-api
+
+      - name: Deploy cfshop-storefront
+        if: steps.auth.outputs.enabled == 'true'
+        working-directory: apps/storefront
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: d3376ef411a0e5f321acb1ee848d2ec1
+          # Stops wrangler from calling back into the OpenNext deploy command.
+          OPEN_NEXT_DEPLOY: "true"
+        run: |
+          grep -q '"name": "cfshop-storefront"' wrangler.jsonc
+          if grep -Eq '"name"[[:space:]]*:[[:space:]]*"rfplay' wrangler.jsonc; then
+            echo "refusing to deploy an rfplay worker" >&2
+            exit 1
+          fi
+          pnpm exec opennextjs-cloudflare build
+          pnpm exec wrangler deploy --name cfshop-storefront

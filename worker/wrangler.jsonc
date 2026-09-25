@@ -6,14 +6,16 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": {
     "enabled": true,
-    "head_sampling_rate": 1
+    "head_sampling_rate": 1,
+    "traces": {
+      "enabled": true
+    }
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "cfshop-db",
-      // placeholder-local: real database_id is created and filled in at first deploy.
-      "database_id": "placeholder-local",
+      "database_id": "a939e97d-26a5-45d7-b0f2-64839d9e871e",
       "migrations_dir": "migrations"
     }
   ],
@@ -26,7 +28,7 @@
   "kv_namespaces": [
     {
       "binding": "CACHE",
-      "id": "placeholder-local"
+      "id": "3c45953353f345ed828227bda620a1e0"
     }
   ],
   "queues": {
@@ -57,10 +59,11 @@
       "new_sqlite_classes": ["CartDO", "InventoryDO"]
     }
   ],
+  // CI deploys this top-level Worker only (`cfshop-api`). staging/production
+  // stay undeployed until their own resource ids replace placeholder-local.
   // Wrangler env inheritance: bindings and most resource blocks are NOT inherited
   // from the top level — each env must redeclare what it needs.
   "env": {
-    // Real resource ids are created and filled in at first deploy.
     "staging": {
       "d1_databases": [
         {
