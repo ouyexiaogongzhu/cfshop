@@ -2,6 +2,9 @@ export type CartItem = {
   itemId: string;
   variantId: string;
   qty: number;
+  title?: string;
+  /** Integer USD cents */
+  unitAmount?: number;
 };
 
 export type CartState = {

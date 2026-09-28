@@ -3,8 +3,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { AddToCartButton } from "@/components/add-to-cart-button";
-import { getProduct, formatPrice } from "@/lib/products";
+import { ProductPurchase } from "@/components/product-purchase";
+import { getProduct } from "@/lib/products";
 
 export async function generateMetadata({
   params,
@@ -21,12 +21,9 @@ export default async function ProductPage({
   const product = await getProduct(slug);
   if (!product) notFound();
 
-  const firstVariantId = product.variants?.[0]?.id;
-
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
       <div className="grid grid-cols-1 gap-10 md:grid-cols-2">
-        {/* Neutral placeholder until real product imagery exists */}
         <div className="flex aspect-square items-center justify-center rounded-lg border bg-muted">
           <span className="text-xs text-muted-foreground">
             {product.category ?? "Product"}
@@ -42,9 +39,6 @@ export default async function ProductPage({
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">
             {product.name}
           </h1>
-          <p className="mt-2 text-xl tabular-nums">
-            {formatPrice(product.price)}
-          </p>
           <Separator className="my-6" />
           {product.description ? (
             <p className="text-muted-foreground leading-relaxed">
@@ -53,17 +47,10 @@ export default async function ProductPage({
           ) : null}
 
           <div className="mt-8">
-            {firstVariantId ? (
-              <AddToCartButton variantId={firstVariantId} size="lg" />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Add to cart unavailable until a variant is linked for this
-                product.
-              </p>
-            )}
+            <ProductPurchase product={product} />
           </div>
           <p className="mt-4 text-sm text-muted-foreground">
-            Free US shipping on orders over $75 · 30-day returns
+            Flat-rate shipping: Hong Kong $5 · International $25
           </p>
           <Link
             href="/shop"

@@ -1,17 +1,16 @@
-import { storeApiBase } from "@/lib/api";
+import { storeFetch } from "@/lib/api";
 
 /**
- * Proxies cart requests to the Worker store API and forwards Cookie /
- * Set-Cookie so the browser only talks to the storefront origin.
- *
- * Local dual-origin (next:3000 + worker:8787) cannot share httpOnly cookies
- * across sites. Production should keep API same-site OR keep this BFF proxy.
+ * Proxies a browser request to the commerce Worker, forwarding Cookie and
+ * Set-Cookie. Uses `storeFetch` so production hits the `API` service binding.
  */
-export async function proxyCartRequest(
+export async function proxyStoreRequest(
   request: Request,
   workerPath: string,
+  init?: { search?: string },
 ): Promise<Response> {
-  const url = `${storeApiBase()}${workerPath.startsWith("/") ? workerPath : `/${workerPath}`}`;
+  const path = workerPath.startsWith("/") ? workerPath : `/${workerPath}`;
+  const urlPath = init?.search ? `${path}${init.search}` : path;
 
   const headers = new Headers();
   headers.set("Accept", "application/json");
@@ -25,7 +24,7 @@ export async function proxyCartRequest(
   const method = request.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
 
-  const upstream = await fetch(url, {
+  const upstream = await storeFetch(urlPath, {
     method,
     headers,
     body: hasBody ? await request.arrayBuffer() : undefined,
@@ -56,4 +55,12 @@ export async function proxyCartRequest(
     statusText: upstream.statusText,
     headers: responseHeaders,
   });
+}
+
+/** @deprecated use proxyStoreRequest */
+export async function proxyCartRequest(
+  request: Request,
+  workerPath: string,
+): Promise<Response> {
+  return proxyStoreRequest(request, workerPath);
 }

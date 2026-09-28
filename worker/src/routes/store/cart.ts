@@ -61,19 +61,61 @@ async function activeVariantExists(db: D1Database, variantId: string): Promise<b
   return row !== null;
 }
 
+type CartLine = { itemId: string; variantId: string; qty: number };
+type EnrichedCartLine = CartLine & {
+  title: string;
+  unitAmount: number | null;
+  currency: string;
+};
+
+async function enrichItems(db: D1Database, items: CartLine[]): Promise<EnrichedCartLine[]> {
+  if (items.length === 0) return [];
+  const enriched = await Promise.all(
+    items.map(async (item) => {
+      const row = await db
+        .prepare(
+          `SELECT p.title AS title, pr.amount AS amount, pr.currency AS currency
+           FROM product_variants v
+           JOIN products p ON p.id = v.product_id
+           LEFT JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
+           WHERE v.id = ?`
+        )
+        .bind(item.variantId)
+        .first<{ title: string; amount: number | null; currency: string | null }>();
+      return {
+        ...item,
+        title: row?.title ?? item.variantId,
+        unitAmount: row?.amount ?? null,
+        currency: row?.currency ?? "usd",
+      };
+    })
+  );
+  return enriched;
+}
+
+async function cartJson(
+  c: StoreContext,
+  state: { items: CartLine[]; locked: boolean },
+  extra: Record<string, unknown> = {}
+) {
+  const items = await enrichItems(c.env.DB, state.items);
+  return c.json({ ...extra, items, locked: state.locked });
+}
+
 cartRoutes.post("/cart", async (c) => {
   const existing = readCartId(c);
   const cartId = existing ?? crypto.randomUUID();
   if (!existing) setCartCookie(c, cartId);
   const state = await cartStub(c, cartId).getState();
-  return c.json({ cartId, items: state.items, locked: state.locked }, 201);
+  const items = await enrichItems(c.env.DB, state.items);
+  return c.json({ cartId, items, locked: state.locked }, 201);
 });
 
 cartRoutes.get("/cart", async (c) => {
   const cartId = readCartId(c);
   if (!cartId) return c.json({ error: "no_cart" }, 404);
   const state = await cartStub(c, cartId).getState();
-  return c.json({ items: state.items, locked: state.locked });
+  return cartJson(c, state);
 });
 
 cartRoutes.post("/cart/items", async (c) => {
@@ -91,7 +133,7 @@ cartRoutes.post("/cart/items", async (c) => {
   if (!found) return c.json({ error: "not_found" }, 404);
 
   const state = await cartStub(c, cartId).addItem(body.variantId, qty);
-  return c.json({ items: state.items, locked: state.locked });
+  return cartJson(c, state);
 });
 
 cartRoutes.patch("/cart/items/:itemId", async (c) => {
@@ -103,12 +145,12 @@ cartRoutes.patch("/cart/items/:itemId", async (c) => {
   if (qty === null) return c.json({ error: "invalid_qty" }, 400);
 
   const state = await cartStub(c, cartId).updateQty(c.req.param("itemId"), qty);
-  return c.json({ items: state.items, locked: state.locked });
+  return cartJson(c, state);
 });
 
 cartRoutes.delete("/cart/items/:itemId", async (c) => {
   const cartId = readCartId(c);
   if (!cartId) return c.json({ error: "no_cart" }, 404);
   const state = await cartStub(c, cartId).removeItem(c.req.param("itemId"));
-  return c.json({ items: state.items, locked: state.locked });
+  return cartJson(c, state);
 });

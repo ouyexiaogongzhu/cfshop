@@ -9,7 +9,14 @@ const PRICE_A = 1999;
 const PRICE_B = 450;
 
 type CartState = {
-  items: { itemId: string; variantId: string; qty: number }[];
+  items: {
+    itemId: string;
+    variantId: string;
+    qty: number;
+    title?: string;
+    unitAmount?: number | null;
+    currency?: string;
+  }[];
   locked: boolean;
 };
 
@@ -176,7 +183,14 @@ describe("cart", () => {
       body: JSON.stringify({ variantId: VARIANT_A, qty: 3 }),
     });
     const merged = await again.json<CartState>();
-    expect(merged.items).toEqual([{ itemId: item?.itemId, variantId: VARIANT_A, qty: 5 }]);
+    expect(merged.items).toHaveLength(1);
+    expect(merged.items[0]).toMatchObject({
+      itemId: item?.itemId,
+      variantId: VARIANT_A,
+      qty: 5,
+      title: expect.any(String),
+      unitAmount: PRICE_A,
+    });
 
     const other = await SELF.fetch("https://example.com/api/store/cart/items", {
       method: "POST",

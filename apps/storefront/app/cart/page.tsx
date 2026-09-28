@@ -13,7 +13,6 @@ export default function CartPage() {
         Review your items before checkout.
       </p>
       <div className="mt-8">
-        {/* List API has no variants; line titles fall back to variantId. */}
         <CartView />
       </div>
     </div>

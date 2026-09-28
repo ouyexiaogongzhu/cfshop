@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,14 +12,41 @@ import {
   removeCartItem,
   updateCartItemQty,
 } from "@/lib/cart-client";
+import { formatPrice } from "@/lib/products";
 
-type TitleMap = Record<string, string>;
+type ShippingMethod = {
+  id: string;
+  code: string;
+  title: string;
+  zone: string;
+  currency: string;
+  amount: number;
+  selected: boolean;
+};
 
-export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMap }) {
+type CheckoutPreview = {
+  preview: true;
+  payment: string;
+  currency: string;
+  subtotal: number;
+  shipping: number;
+  tax: number;
+  total: number;
+  shippingMethodId: string;
+  country: string | null;
+  orderId: null;
+};
+
+export function CartView() {
   const [cart, setCart] = useState<CartState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [country, setCountry] = useState("HK");
+  const [methods, setMethods] = useState<ShippingMethod[]>([]);
+  const [shippingMethodId, setShippingMethodId] = useState<string>("");
+  const [preview, setPreview] = useState<CheckoutPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -37,8 +64,39 @@ export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMa
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/shipping-methods?country=${encodeURIComponent(country)}`,
+          { credentials: "include" },
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as { methods?: ShippingMethod[] };
+        if (cancelled) return;
+        const nextMethods = data.methods ?? [];
+        setMethods(nextMethods);
+        const selected = nextMethods.find((m) => m.selected) ?? nextMethods[0];
+        setShippingMethodId(selected?.id ?? "");
+      } catch {
+        /* shipping UI is best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [country]);
+
+  const subtotal = useMemo(() => {
+    return (cart?.items ?? []).reduce(
+      (sum, item) => sum + (item.unitAmount ?? 0) * item.qty,
+      0,
+    );
+  }, [cart]);
+
   function lineLabel(item: CartItem): string {
-    return titleByVariantId[item.variantId] ?? item.variantId;
+    return item.title ?? item.variantId;
   }
 
   function setQty(itemId: string, qty: number) {
@@ -46,6 +104,7 @@ export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMa
       try {
         const next = await updateCartItemQty(itemId, qty);
         setCart(next);
+        setPreview(null);
       } catch {
         setError("Couldn’t update quantity");
       }
@@ -57,8 +116,32 @@ export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMa
       try {
         const next = await removeCartItem(itemId);
         setCart(next);
+        setPreview(null);
       } catch {
         setError("Couldn’t remove item");
+      }
+    });
+  }
+
+  function runPreview() {
+    if (!shippingMethodId) return;
+    setPreviewError(null);
+    startTransition(async () => {
+      try {
+        const res = await fetch("/api/checkout", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ shippingMethodId, country }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error ?? "preview_failed");
+        }
+        setPreview((await res.json()) as CheckoutPreview);
+      } catch {
+        setPreview(null);
+        setPreviewError("Couldn’t preview checkout");
       }
     });
   }
@@ -96,15 +179,9 @@ export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMa
           >
             <div className="min-w-0">
               <p className="font-medium truncate">{lineLabel(item)}</p>
-              {!titleByVariantId[item.variantId] ? (
-                <p className="text-xs text-muted-foreground font-mono">
-                  variant {item.variantId}
-                </p>
-              ) : (
-                <p className="text-xs text-muted-foreground font-mono">
-                  {item.variantId}
-                </p>
-              )}
+              <p className="text-sm text-muted-foreground tabular-nums">
+                {formatPrice(item.unitAmount ?? 0)} each
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <Input
@@ -139,13 +216,75 @@ export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMa
         ))}
       </ul>
 
-      {cart?.locked ? (
-        <p className="text-sm text-muted-foreground">
-          This cart is locked for checkout.
-        </p>
-      ) : null}
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-muted-foreground">Subtotal</span>
+        <span className="tabular-nums font-medium">{formatPrice(subtotal)}</span>
+      </div>
 
       <Separator />
+
+      <div className="space-y-3 rounded-lg border p-4">
+        <p className="font-medium">Shipping preview</p>
+        <label className="block text-sm">
+          <span className="text-muted-foreground">Country (ISO)</span>
+          <Input
+            className="mt-1 max-w-[8rem] uppercase"
+            value={country}
+            maxLength={2}
+            onChange={(e) => setCountry(e.target.value.toUpperCase())}
+          />
+        </label>
+        <div className="flex flex-wrap gap-2">
+          {methods.map((method) => (
+            <button
+              key={method.id}
+              type="button"
+              onClick={() => {
+                setShippingMethodId(method.id);
+                setPreview(null);
+              }}
+              className={
+                method.id === shippingMethodId
+                  ? "rounded-md border border-foreground bg-foreground px-3 py-1.5 text-sm text-background"
+                  : "rounded-md border px-3 py-1.5 text-sm"
+              }
+            >
+              {method.title} · {formatPrice(method.amount)}
+            </button>
+          ))}
+        </div>
+        <Button type="button" disabled={pending || !shippingMethodId} onClick={runPreview}>
+          {pending ? "Calculating…" : "Preview totals"}
+        </Button>
+        {previewError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {previewError}
+          </p>
+        ) : null}
+        {preview ? (
+          <div className="space-y-1 text-sm">
+            <div className="flex justify-between">
+              <span>Subtotal</span>
+              <span className="tabular-nums">{formatPrice(preview.subtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Shipping</span>
+              <span className="tabular-nums">{formatPrice(preview.shipping)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span>Tax</span>
+              <span className="tabular-nums">{formatPrice(preview.tax)}</span>
+            </div>
+            <div className="flex justify-between font-medium">
+              <span>Total</span>
+              <span className="tabular-nums">{formatPrice(preview.total)}</span>
+            </div>
+            <p className="pt-2 text-muted-foreground">
+              Payment is not enabled yet — this is a preview only.
+            </p>
+          </div>
+        ) : null}
+      </div>
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Button
@@ -154,9 +293,6 @@ export function CartView({ titleByVariantId = {} }: { titleByVariantId?: TitleMa
           render={<Link href="/shop" />}
         >
           Continue shopping
-        </Button>
-        <Button type="button" disabled>
-          Checkout coming soon
         </Button>
       </div>
     </div>
