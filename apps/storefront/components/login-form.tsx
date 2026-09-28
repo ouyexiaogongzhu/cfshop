@@ -6,10 +6,18 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
+/** Same-origin relative paths only (blocks //evil and backslash tricks). */
+function safeNextPath(raw: string | null): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) {
+    return "/account";
+  }
+  return raw;
+}
+
 export function LoginForm() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get("next") || "/account";
+  const next = safeNextPath(search.get("next"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +43,7 @@ export function LoginForm() {
         );
         return;
       }
-      router.replace(next.startsWith("/") ? next : "/account");
+      router.replace(next);
       router.refresh();
     } catch {
       setError("Could not log in. Try again.");

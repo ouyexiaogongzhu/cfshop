@@ -27,6 +27,18 @@ export async function syncInventoryDoFromD1(env: Env, variantId: string): Promis
   await stub.setStock(variantId, available);
 }
 
+/** Force DO `available` to match an admin D1 write (preserves reserved/sold). */
+export async function reconcileInventoryDoAvailable(
+  env: Env,
+  variantId: string,
+  available: number
+): Promise<void> {
+  if (!Number.isSafeInteger(available) || available < 0) {
+    throw new Error("invalid_available");
+  }
+  await inventoryStub(env, variantId).setStock(variantId, available);
+}
+
 /** Decrement available stock inside InventoryDO (moved into `reserved`). */
 export async function reserveLineStock(
   env: Env,

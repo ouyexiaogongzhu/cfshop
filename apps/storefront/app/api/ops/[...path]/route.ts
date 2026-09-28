@@ -2,19 +2,36 @@ import { storeFetch } from "@/lib/api";
 
 type Params = { params: Promise<{ path: string[] }> };
 
+/** Only forward known admin surfaces — blocks open proxy to future admin routes. */
+const ALLOWED = [
+  /^products(?:\/[A-Za-z0-9_-]+)?$/,
+  /^inventory\/[A-Za-z0-9_-]+$/,
+  /^orders(?:\/[A-Za-z0-9_-]+\/shipments)?$/,
+  /^media$/,
+];
+
+function isAllowedOpsPath(path: string): boolean {
+  const bare = path.split("?")[0] ?? path;
+  return ALLOWED.some((re) => re.test(bare));
+}
+
 /**
  * Admin ops proxy: browser → storefront → API service binding.
- * Forwards Authorization (and multipart bodies) without exposing workers.dev.
+ * Requires Authorization from the caller; never injects a server-side admin secret.
  */
 async function proxyOps(request: Request, pathParts: string[]) {
   const path = pathParts.map(decodeURIComponent).join("/");
-  if (!path || path.includes("..")) {
+  if (!path || path.includes("..") || !isAllowedOpsPath(path)) {
     return Response.json({ error: "bad_request" }, { status: 400 });
   }
 
-  const headers = new Headers();
   const auth = request.headers.get("authorization");
-  if (auth) headers.set("Authorization", auth);
+  if (!auth?.startsWith("Bearer ") || auth.length < 16) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  const headers = new Headers();
+  headers.set("Authorization", auth);
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
   headers.set("Accept", request.headers.get("accept") ?? "application/json");

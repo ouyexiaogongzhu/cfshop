@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../../lib/admin";
+import { reconcileInventoryDoAvailable } from "../../lib/inventory-do";
 
 declare global {
   interface Env {
@@ -213,6 +214,7 @@ adminRoutes.post("/products", async (c) => {
 
   const db = c.env.DB;
   const productId = crypto.randomUUID();
+  const seededVariants: Array<{ id: string; available: number }> = [];
   const statements = [
     db
       .prepare(
@@ -225,6 +227,7 @@ adminRoutes.post("/products", async (c) => {
   for (const variant of parsed.variants) {
     const variantId = crypto.randomUUID();
     const priceId = crypto.randomUUID();
+    seededVariants.push({ id: variantId, available: variant.available });
     statements.push(
       db
         .prepare(
@@ -249,6 +252,10 @@ adminRoutes.post("/products", async (c) => {
   } catch (err) {
     if (isUniqueViolation(err)) return c.json({ error: "conflict" }, 409);
     throw err;
+  }
+
+  for (const variant of seededVariants) {
+    await reconcileInventoryDoAvailable(c.env, variant.id, variant.available);
   }
 
   return c.json({ id: productId, slug: parsed.slug }, 201);
@@ -281,7 +288,7 @@ adminRoutes.patch("/products/:id", async (c) => {
     imageKey !== null &&
     (typeof imageKey !== "string" ||
       imageKey.includes("..") ||
-      !/^products\/[a-zA-Z0-9._/-]+$/.test(imageKey))
+      !/^products\/[a-zA-Z0-9._/-]+\.(png|jpe?g|webp)$/i.test(imageKey))
   ) {
     return c.json({ error: "bad_request" }, 400);
   }
@@ -359,26 +366,27 @@ adminRoutes.post("/media", async (c) => {
   if (typeof keyField !== "string" || !keyField) return c.json({ error: "bad_request" }, 400);
 
   const key = keyField.replace(/^\/+/, "");
-  if (key.includes("..") || !/^products\/[a-zA-Z0-9._/-]+$/.test(key)) {
+  if (key.includes("..") || !/^products\/[a-zA-Z0-9._/-]+\.(png|jpe?g|webp)$/i.test(key)) {
     return c.json({ error: "bad_request" }, 400);
   }
   if (file.size > 2_000_000) return c.json({ error: "too_large" }, 413);
 
+  const forcedType = forcedImageType(key);
+  if (!forcedType) return c.json({ error: "bad_request" }, 400);
+
   await c.env.MEDIA.put(key, await file.arrayBuffer(), {
-    httpMetadata: {
-      contentType: file.type || guessUploadType(key),
-    },
+    httpMetadata: { contentType: forcedType },
   });
 
   return c.json({ key, imageUrl: `/api/media/${key}` }, 201);
 });
 
-function guessUploadType(key: string): string {
-  if (key.endsWith(".svg")) return "image/svg+xml";
-  if (key.endsWith(".png")) return "image/png";
-  if (key.endsWith(".jpg") || key.endsWith(".jpeg")) return "image/jpeg";
-  if (key.endsWith(".webp")) return "image/webp";
-  return "application/octet-stream";
+function forcedImageType(key: string): string | null {
+  const ext = key.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "png") return "image/png";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "webp") return "image/webp";
+  return null;
 }
 
 adminRoutes.post("/inventory/:variantId", async (c) => {
@@ -430,6 +438,8 @@ adminRoutes.post("/inventory/:variantId", async (c) => {
       )
       .bind(crypto.randomUUID(), variantId, delta),
   ]);
+
+  await reconcileInventoryDoAvailable(c.env, variantId, next);
 
   return c.json({ variantId, available: next });
 });

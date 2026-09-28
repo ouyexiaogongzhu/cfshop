@@ -82,12 +82,10 @@ class StripePaymentProvider implements PaymentProvider {
   }
 
   async createCheckoutSession(input: PaymentSessionRequest): Promise<PaymentSession> {
-    const sessionId = `cs_test_${input.orderId.replace(/-/g, "").slice(0, 24)}`;
-    return {
-      provider: "stripe",
-      sessionId,
-      url: `https://checkout.stripe.com/c/pay/${sessionId}`,
-    };
+    // Real Stripe Checkout Session create is not wired yet — fail closed so
+    // misconfigured deploys cannot hand customers fabricated cs_test_* URLs.
+    void input;
+    throw new PaymentUnavailableError("stripe_checkout_not_implemented");
   }
 
   async verifyWebhookSignature(

@@ -34,5 +34,9 @@ export function setSessionCookie(c: Context, sessionId: string): void {
 }
 
 export function clearSessionCookie(c: Context): void {
-  deleteCookie(c, COOKIE, { path: "/" });
+  deleteCookie(c, COOKIE, {
+    path: "/",
+    secure: true,
+    sameSite: "Lax",
+  });
 }

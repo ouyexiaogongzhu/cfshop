@@ -5,8 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const TOKEN_KEY = "cfshop_admin_token";
-
 type AdminVariant = { id: string; sku: string; available: number };
 type AdminProduct = {
   id: string;
@@ -53,14 +51,6 @@ export default function AdminPage() {
   const [orders, setOrders] = useState<AdminOrder[]>([]);
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    const saved = sessionStorage.getItem(TOKEN_KEY);
-    if (saved) {
-      setToken(saved);
-      setDraftToken(saved);
-    }
-  }, []);
-
   const authed = Boolean(token);
 
   const load = useCallback(async (activeToken: string, activeTab: typeof tab) => {
@@ -79,7 +69,6 @@ export default function AdminPage() {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "load_failed";
       if (msg === "unauthorized") {
-        sessionStorage.removeItem(TOKEN_KEY);
         setToken("");
         setError("Invalid admin token.");
       } else {
@@ -99,12 +88,10 @@ export default function AdminPage() {
     e.preventDefault();
     const next = draftToken.trim();
     if (!next) return;
-    sessionStorage.setItem(TOKEN_KEY, next);
     setToken(next);
   }
 
   function lock() {
-    sessionStorage.removeItem(TOKEN_KEY);
     setToken("");
     setDraftToken("");
     setProducts([]);
@@ -240,7 +227,9 @@ function ProductsPanel({
 
   async function uploadImage(product: AdminProduct, file: File) {
     onError(null);
-    const key = `products/${product.slug}.${file.name.split(".").pop()?.toLowerCase() || "bin"}`;
+    const ext = (file.name.split(".").pop() || "png").toLowerCase();
+    const safeExt = ["png", "jpg", "jpeg", "webp"].includes(ext) ? ext : "png";
+    const key = `products/${product.slug}.${safeExt}`;
     const form = new FormData();
     form.set("key", key);
     form.set("file", file);
@@ -306,7 +295,7 @@ function ProductsPanel({
                 <span className="underline-offset-4 hover:underline">Upload image</span>
                 <input
                   type="file"
-                  accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                  accept="image/png,image/jpeg,image/webp"
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0];

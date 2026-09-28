@@ -3,6 +3,10 @@ import { storeFetch } from "@/lib/api";
 /**
  * Proxies a browser request to the commerce Worker, forwarding Cookie and
  * Set-Cookie. Uses `storeFetch` so production hits the `API` service binding.
+ *
+ * Rewrites `Secure` on Set-Cookie to match the browser request: Worker always
+ * emits Secure (correct for HTTPS / workers.dev), but localhost `next dev`
+ * needs the flag stripped or the browser drops the cookie.
  */
 export async function proxyStoreRequest(
   request: Request,
@@ -37,17 +41,18 @@ export async function proxyStoreRequest(
     responseHeaders.set("Content-Type", upstreamContentType);
   }
 
+  const browserIsHttps = new URL(request.url).protocol === "https:";
   const setCookies =
     typeof upstream.headers.getSetCookie === "function"
       ? upstream.headers.getSetCookie()
       : [];
   if (setCookies.length > 0) {
     for (const value of setCookies) {
-      responseHeaders.append("Set-Cookie", value);
+      responseHeaders.append("Set-Cookie", adaptSetCookie(value, browserIsHttps));
     }
   } else {
     const single = upstream.headers.get("set-cookie");
-    if (single) responseHeaders.append("Set-Cookie", single);
+    if (single) responseHeaders.append("Set-Cookie", adaptSetCookie(single, browserIsHttps));
   }
 
   return new Response(upstream.body, {
@@ -55,6 +60,16 @@ export async function proxyStoreRequest(
     statusText: upstream.statusText,
     headers: responseHeaders,
   });
+}
+
+function adaptSetCookie(value: string, browserIsHttps: boolean): string {
+  let out = value;
+  if (!browserIsHttps) {
+    out = out.replace(/;\s*Secure/gi, "");
+  } else if (!/;\s*Secure/i.test(out)) {
+    out += "; Secure";
+  }
+  return out;
 }
 
 /** @deprecated use proxyStoreRequest */

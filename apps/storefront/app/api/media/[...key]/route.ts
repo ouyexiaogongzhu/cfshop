@@ -2,13 +2,15 @@ import { storeFetch } from "@/lib/api";
 
 type Params = { params: Promise<{ key: string[] }> };
 
+const KEY_RE = /^products\/[a-zA-Z0-9._/-]+\.(png|jpe?g|webp)$/i;
+
 /** Browser → storefront → API service binding → R2 (no public API hop). */
 export async function GET(_request: Request, { params }: Params) {
   try {
     const resolved = await params;
     const parts = resolved.key ?? [];
     const key = parts.map(decodeURIComponent).join("/");
-    if (!key || key.includes("..")) {
+    if (!key || key.includes("..") || !KEY_RE.test(key)) {
       return new Response("Bad Request", { status: 400 });
     }
 
@@ -28,6 +30,7 @@ export async function GET(_request: Request, { params }: Params) {
     );
     const etag = upstream.headers.get("etag");
     if (etag) headers.set("ETag", etag);
+    headers.set("X-Content-Type-Options", "nosniff");
 
     return new Response(bytes, { status: upstream.status, headers });
   } catch (err) {

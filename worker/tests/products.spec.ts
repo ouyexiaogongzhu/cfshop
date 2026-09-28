@@ -127,3 +127,29 @@ describe("GET /api/store/products/:slug", () => {
     });
   });
 });
+
+describe("GET /api/store/media/*", () => {
+  it("streams an R2 object for a valid products key", async () => {
+    const key = "products/test-media.png";
+    const body = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    await env.MEDIA.put(key, body, {
+      httpMetadata: { contentType: "image/png" },
+    });
+
+    const res = await SELF.fetch(`https://example.com/api/store/media/${key}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(body);
+  });
+
+  it("rejects svg keys (XSS surface)", async () => {
+    const res = await SELF.fetch("https://example.com/api/store/media/products/x.svg");
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects path traversal keys", async () => {
+    const res = await SELF.fetch("https://example.com/api/store/media/products/../secret.png");
+    expect(res.status).toBe(400);
+  });
+});
