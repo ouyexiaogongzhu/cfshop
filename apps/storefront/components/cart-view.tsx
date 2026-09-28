@@ -317,7 +317,8 @@ export function CartView() {
               <span className="tabular-nums">{formatPrice(preview.total)}</span>
             </div>
             <p className="pt-2 text-muted-foreground">
-              Payment is not enabled yet — this is a preview only.
+              Preview only — continue to checkout to place a pending order
+              (payment still deferred).
             </p>
           </div>
         ) : null}
@@ -330,6 +331,9 @@ export function CartView() {
           render={<Link href="/shop" />}
         >
           Continue shopping
+        </Button>
+        <Button nativeButton={false} render={<Link href="/checkout" />}>
+          Checkout
         </Button>
       </div>
     </div>

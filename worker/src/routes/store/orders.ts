@@ -10,6 +10,7 @@ import {
   orderResponseBody,
   type StoreOrderRecord,
 } from "../../lib/orders";
+import { readSessionUserId, sessionCookie } from "../../lib/session";
 
 const CART_COOKIE = "cfshop_cart";
 
@@ -35,6 +36,52 @@ function normalizeEmail(value: unknown): string | null {
     return null;
   }
   return email;
+}
+
+function requiredText(value: unknown, max = 200): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text || text.length > max) return null;
+  return text;
+}
+
+function optionalText(value: unknown, max = 200): string | null {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (text.length > max) return null;
+  return text;
+}
+
+function parseAddressJson(body: Record<string, unknown>, country: string | null): string | "invalid" {
+  const address = body.address;
+  if (address === undefined) {
+    return JSON.stringify({ country });
+  }
+  if (!address || typeof address !== "object" || Array.isArray(address)) return "invalid";
+  const row = address as Record<string, unknown>;
+  const name = requiredText(row.name);
+  const line1 = requiredText(row.line1);
+  const line2 = optionalText(row.line2);
+  const city = requiredText(row.city);
+  const region = optionalText(row.region);
+  const postalCode = optionalText(row.postalCode);
+  const addrCountry =
+    typeof row.country === "string" && /^[A-Za-z]{2}$/.test(row.country.trim())
+      ? row.country.trim().toUpperCase()
+      : country;
+  if (!name || !line1 || line2 === null || !city || region === null || postalCode === null || !addrCountry) {
+    return "invalid";
+  }
+  return JSON.stringify({
+    name,
+    line1,
+    line2,
+    city,
+    region,
+    postalCode,
+    country: addrCountry,
+  });
 }
 
 async function resolveLines(
@@ -84,6 +131,9 @@ export async function placePendingOrder(
   if (lines === "invalid") return c.json({ error: "invalid_request" }, 400);
   if (lines === "empty_cart") return c.json({ error: "empty_cart" }, 400);
 
+  const addressJson = parseAddressJson(body, country);
+  if (addressJson === "invalid") return c.json({ error: "invalid_request" }, 400);
+
   const usesCart = body.items === undefined;
   const cartId = usesCart ? getCookie(c, CART_COOKIE) : null;
   const cartStub = cartId ? c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)) : null;
@@ -97,6 +147,7 @@ export async function placePendingOrder(
       country,
       lines,
       idempotencyKey: key,
+      addressJson,
     });
     if (cartStub && record.created) {
       await cartStub.unlock();
@@ -114,6 +165,51 @@ export async function placePendingOrder(
     throw err;
   }
 }
+
+orderRoutes.get("/orders", async (c) => {
+  const userId = await readSessionUserId(c.env.CACHE, sessionCookie(c));
+  if (!userId) return c.json({ error: "unauthorized" }, 401);
+
+  const user = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`)
+    .bind(userId)
+    .first<{ email: string }>();
+  if (!user) return c.json({ error: "unauthorized" }, 401);
+
+  const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 20) || 20, 1), 50);
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total, created_at
+     FROM orders
+     WHERE lower(email) = lower(?)
+     ORDER BY created_at DESC
+     LIMIT ?`
+  )
+    .bind(user.email, limit)
+    .all<{
+      id: string;
+      email: string;
+      status: string;
+      currency: string;
+      subtotal: number;
+      shipping_amount: number;
+      tax: number;
+      total: number;
+      created_at: string;
+    }>();
+
+  return c.json(
+    (results ?? []).map((row) => ({
+      orderId: row.id,
+      email: row.email,
+      status: row.status,
+      currency: row.currency,
+      subtotal: row.subtotal,
+      shipping: row.shipping_amount,
+      tax: row.tax,
+      total: row.total,
+      createdAt: row.created_at,
+    }))
+  );
+});
 
 orderRoutes.post("/orders", async (c) => {
   const body = await readJsonObject(c);
