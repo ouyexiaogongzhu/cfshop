@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { ProductCard } from "@/components/product-card";
-import { products } from "@/lib/products";
+import { listProducts } from "@/lib/products";
 
-export default function Home() {
-  const featured = products.filter((p) => p.featured);
+const FEATURED_COUNT = 4;
+
+export default async function Home() {
+  const products = await listProducts();
+  const featured = products.slice(0, FEATURED_COUNT);
 
   return (
     <div className="mx-auto max-w-6xl px-4">
@@ -25,11 +28,15 @@ export default function Home() {
         <h2 className="mb-6 text-2xl font-semibold tracking-tight">
           Featured products
         </h2>
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          {featured.map((product) => (
-            <ProductCard key={product.slug} product={product} />
-          ))}
-        </div>
+        {featured.length === 0 ? (
+          <p className="text-muted-foreground">No products available yet.</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            {featured.map((product) => (
+              <ProductCard key={product.slug} product={product} />
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );

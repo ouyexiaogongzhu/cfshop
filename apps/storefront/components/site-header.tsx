@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ShoppingCart } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CartCountBadge } from "@/components/cart-count-badge";
 
 export function SiteHeader() {
   return (
@@ -20,17 +20,15 @@ export function SiteHeader() {
             </Link>
           </nav>
         </div>
-        {/* Decorative until M2 adds cart state */}
         <Button
           variant="ghost"
           size="icon"
           className="relative"
-          aria-label="Cart, 0 items"
+          nativeButton={false}
+          render={<Link href="/cart" aria-label="Cart" />}
         >
           <ShoppingCart className="size-5" />
-          <Badge className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 text-[10px] tabular-nums">
-            0
-          </Badge>
+          <CartCountBadge />
         </Button>
       </div>
     </header>

@@ -1,94 +1,134 @@
-// Placeholder catalog — M1 replaces this with API calls to the worker.
+import { storeFetch } from "./api";
 
+/** Variant price row from GET /api/store/products/:slug */
+export interface ProductVariant {
+  id: string;
+  sku: string;
+  options: Record<string, unknown> | string;
+  currency: string;
+  /** Integer USD cents */
+  amount: number;
+}
+
+/**
+ * Catalog product for UI.
+ * API uses `title`; `name` is the display alias used by components.
+ * `price` is always integer USD cents (list: API price; detail: min variant amount).
+ */
 export interface Product {
+  id: string;
   slug: string;
+  title: string;
   name: string;
-  price: number; // USD
-  category: string;
+  /** Integer USD cents */
+  price: number;
+  category?: string;
+  description?: string;
+  variants?: ProductVariant[];
+}
+
+interface ApiProductListItem {
+  id: string;
+  slug: string;
+  title: string;
+  price: number;
+  category?: string | null;
+}
+
+interface ApiProductDetail {
+  id: string;
+  slug: string;
+  title: string;
   description: string;
-  featured?: boolean;
+  category?: string | null;
+  variants?: ProductVariant[];
 }
 
-export const products: Product[] = [
-  {
-    slug: "merino-crew-tee",
-    name: "Merino Crew Tee",
-    price: 48,
-    category: "Apparel",
-    description:
-      "A lightweight merino wool tee that stays fresh for days. Breathable, odor-resistant, and soft against the skin — an ideal everyday layer in any season.",
-    featured: true,
-  },
-  {
-    slug: "everyday-canvas-tote",
-    name: "Everyday Canvas Tote",
-    price: 65,
-    category: "Accessories",
-    description:
-      "Heavyweight cotton canvas tote with an interior zip pocket and reinforced base. Carries groceries, laptops, and everything in between.",
-    featured: true,
-  },
-  {
-    slug: "pour-over-kettle",
-    name: "Pour-Over Kettle",
-    price: 89,
-    category: "Home",
-    description:
-      "A precision-gooseneck kettle with a counterbalanced handle for a steady, controlled pour. Brushed stainless steel, works on all stovetops.",
-    featured: true,
-  },
-  {
-    slug: "trail-runner-socks",
-    name: "Trail Runner Socks",
-    price: 18,
-    category: "Apparel",
-    description:
-      "Cushioned merino blend socks with a seamless toe box and arch support. Built for long miles and sold in singles so you can stock up exactly how you like.",
-    featured: true,
-  },
-  {
-    slug: "slim-leather-wallet",
-    name: "Slim Leather Wallet",
-    price: 55,
-    category: "Accessories",
-    description:
-      "Full-grain leather bifold with six card slots and a slim bill compartment. Ages into a patina that is uniquely yours.",
-  },
-  {
-    slug: "ceramic-mug-set",
-    name: "Ceramic Mug Set",
-    price: 42,
-    category: "Home",
-    description:
-      "Two 12 oz stoneware mugs with a matte glaze and comfortable handle. Dishwasher and microwave safe.",
-  },
-  {
-    slug: "usb-c-hub",
-    name: "7-in-1 USB-C Hub",
-    price: 59,
-    category: "Tech",
-    description:
-      "HDMI 4K@60Hz, 100W power delivery, two USB-A ports, and SD/microSD slots in an aluminum shell the size of a matchbox.",
-  },
-  {
-    slug: "packable-rain-shell",
-    name: "Packable Rain Shell",
-    price: 120,
-    category: "Apparel",
-    description:
-      "A 2.5-layer waterproof shell that packs into its own chest pocket. Fully taped seams, adjustable hood, and pit zips for breathability.",
-  },
-];
-
-export function getProduct(slug: string): Product | undefined {
-  return products.find((p) => p.slug === slug);
+function normalizeCategory(category?: string | null): string | undefined {
+  const trimmed = category?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
-export const categories: string[] = [...new Set(products.map((p) => p.category))];
+function mapListItem(item: ApiProductListItem): Product {
+  return {
+    id: item.id,
+    slug: item.slug,
+    title: item.title,
+    name: item.title,
+    price: item.price,
+    category: normalizeCategory(item.category),
+  };
+}
 
-export function formatPrice(usd: number): string {
+function mapDetail(item: ApiProductDetail): Product {
+  const variants = item.variants ?? [];
+  const amounts = variants.map((v) => v.amount).filter((n) => Number.isFinite(n));
+  const price = amounts.length > 0 ? Math.min(...amounts) : 0;
+  return {
+    id: item.id,
+    slug: item.slug,
+    title: item.title,
+    name: item.title,
+    description: item.description ?? "",
+    category: normalizeCategory(item.category),
+    price,
+    variants,
+  };
+}
+
+/** Unique categories present on a product list (skips missing/empty). */
+export function categoriesFrom(products: Product[]): string[] {
+  return [
+    ...new Set(
+      products
+        .map((p) => p.category)
+        .filter((c): c is string => Boolean(c))
+    ),
+  ];
+}
+
+/**
+ * Active products from GET /api/store/products.
+ * Soft-fails to [] when the API is unreachable (e.g. during `next build`).
+ */
+export async function listProducts(): Promise<Product[]> {
+  try {
+    const res = await storeFetch("/api/store/products");
+    if (!res.ok) return [];
+    const data: unknown = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.map((row) => mapListItem(row as ApiProductListItem));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Product detail from GET /api/store/products/:slug.
+ * Soft-fails to null on 404 / network errors (use with notFound()).
+ */
+export async function getProduct(slug: string): Promise<Product | null> {
+  try {
+    const res = await storeFetch(
+      `/api/store/products/${encodeURIComponent(slug)}`
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as ApiProductDetail;
+    if (!data?.slug) return null;
+    return mapDetail(data);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Format API money for display.
+ * Values are integer USD cents — divide by 100 before formatting.
+ * Example: `formatPrice(2500)` → `"$25.00"`
+ */
+export function formatPrice(cents: number): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-  }).format(usd);
+  }).format(cents / 100);
 }

@@ -7,5 +7,12 @@
 	"assets": {
 		"directory": ".open-next/assets",
 		"binding": "ASSETS"
-	}
+	},
+	// Same-account RPC to the API Worker (Scalius-style). Local next dev still uses STORE_API_URL / localhost:8787.
+	"services": [
+		{
+			"binding": "API",
+			"service": "cfshop-api"
+		}
+	]
 }

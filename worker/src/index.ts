@@ -2,6 +2,15 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { CartDO } from "./durable-objects/cart";
 import { InventoryDO } from "./durable-objects/inventory";
+import { adminRoutes } from "./routes/admin/app";
+import { addressRoutes } from "./routes/store/addresses";
+import { authRoutes } from "./routes/store/auth";
+import { cartRoutes } from "./routes/store/cart";
+import { checkoutRoutes } from "./routes/store/checkout";
+import { orderRoutes } from "./routes/store/orders";
+import { productRoutes } from "./routes/store/products";
+import { shippingRoutes } from "./routes/store/shipping";
+import { stripeWebhookRoutes } from "./routes/webhooks/stripe";
 
 export { CartDO, InventoryDO };
 
@@ -41,48 +50,19 @@ app.get("/api/health", async (c) => {
   return c.json({ ok: true });
 });
 
-// One query: active products with their cheapest USD price (integer cents).
-app.get("/api/store/products", async (c) => {
-  const limit = Math.min(Number(c.req.query("limit") ?? 20) || 20, 100);
-  const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
-  const { results } = await c.env.DB.prepare(
-    `SELECT p.id, p.slug, p.title, MIN(pr.amount) AS price
-     FROM products p
-     JOIN product_variants v ON v.product_id = p.id
-     JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
-     WHERE p.status = 'active'
-     GROUP BY p.id
-     ORDER BY p.created_at
-     LIMIT ? OFFSET ?`
-  )
-    .bind(limit, offset)
-    .all<{ id: string; slug: string; title: string; price: number }>();
-  return c.json(results);
-});
-
-app.get("/api/store/products/:slug", async (c) => {
-  const db = c.env.DB;
-  const product = await db
-    .prepare(`SELECT id, slug, title, description FROM products WHERE slug = ? AND status = 'active'`)
-    .bind(c.req.param("slug"))
-    .first<{ id: string; slug: string; title: string; description: string }>();
-  if (!product) return c.json({ error: "not_found" }, 404);
-
-  const { results: variants } = await db
-    .prepare(
-      `SELECT v.id, v.sku, v.options, pr.currency, pr.amount
-       FROM product_variants v
-       JOIN prices pr ON pr.variant_id = v.id
-       WHERE v.product_id = ?`
-    )
-    .bind(product.id)
-    .all<{ id: string; sku: string; options: string; currency: string; amount: number }>();
-  return c.json({ ...product, variants });
-});
+app.route("/api/store", productRoutes);
+app.route("/api/store", authRoutes);
+app.route("/api/store", addressRoutes);
+app.route("/api/store", cartRoutes);
+app.route("/api/store", shippingRoutes);
+app.route("/api/store", checkoutRoutes);
+app.route("/api/store", orderRoutes);
+app.route("/api/admin", adminRoutes);
+app.route("/webhooks", stripeWebhookRoutes);
 
 export default {
   fetch: app.fetch,
-  // Scaffold: log and ack. Real handlers (email, fulfillment, outbox drain) come in M3.
+  // Scaffold: log and ack. Real handlers (email, fulfillment, outbox drain) come later.
   queue: async (batch: MessageBatch<unknown>) => {
     for (const message of batch.messages) {
       console.log(JSON.stringify({ level: "info", msg: "queue_message", body: message.body }));

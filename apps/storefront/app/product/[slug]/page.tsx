@@ -2,20 +2,15 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { getProduct, formatPrice, products } from "@/lib/products";
-
-export function generateStaticParams() {
-  return products.map((p) => ({ slug: p.slug }));
-}
+import { AddToCartButton } from "@/components/add-to-cart-button";
+import { getProduct, formatPrice } from "@/lib/products";
 
 export async function generateMetadata({
   params,
 }: PageProps<"/product/[slug]">): Promise<Metadata> {
   const { slug } = await params;
-  const product = getProduct(slug);
+  const product = await getProduct(slug);
   return { title: product?.name ?? "Product" };
 }
 
@@ -23,21 +18,27 @@ export default async function ProductPage({
   params,
 }: PageProps<"/product/[slug]">) {
   const { slug } = await params;
-  const product = getProduct(slug);
+  const product = await getProduct(slug);
   if (!product) notFound();
+
+  const firstVariantId = product.variants?.[0]?.id;
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
       <div className="grid grid-cols-1 gap-10 md:grid-cols-2">
         {/* Neutral placeholder until real product imagery exists */}
         <div className="flex aspect-square items-center justify-center rounded-lg border bg-muted">
-          <span className="text-xs text-muted-foreground">{product.category}</span>
+          <span className="text-xs text-muted-foreground">
+            {product.category ?? "Product"}
+          </span>
         </div>
 
         <div className="flex flex-col">
-          <Badge variant="secondary" className="w-fit">
-            {product.category}
-          </Badge>
+          {product.category ? (
+            <Badge variant="secondary" className="w-fit">
+              {product.category}
+            </Badge>
+          ) : null}
           <h1 className="mt-3 text-3xl font-semibold tracking-tight">
             {product.name}
           </h1>
@@ -45,22 +46,21 @@ export default async function ProductPage({
             {formatPrice(product.price)}
           </p>
           <Separator className="my-6" />
-          <p className="text-muted-foreground leading-relaxed">
-            {product.description}
-          </p>
+          {product.description ? (
+            <p className="text-muted-foreground leading-relaxed">
+              {product.description}
+            </p>
+          ) : null}
 
-          <div className="mt-8 flex items-center gap-3">
-            {/* Qty + add-to-cart are placeholders — cart state lands in M2 */}
-            <Input
-              type="number"
-              defaultValue={1}
-              min={1}
-              aria-label="Quantity"
-              className="w-20"
-            />
-            <Button size="lg" type="button" className="flex-1">
-              Add to cart
-            </Button>
+          <div className="mt-8">
+            {firstVariantId ? (
+              <AddToCartButton variantId={firstVariantId} size="lg" />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Add to cart unavailable until a variant is linked for this
+                product.
+              </p>
+            )}
           </div>
           <p className="mt-4 text-sm text-muted-foreground">
             Free US shipping on orders over $75 · 30-day returns

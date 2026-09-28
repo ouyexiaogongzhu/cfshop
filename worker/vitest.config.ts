@@ -6,7 +6,18 @@ export default defineConfig(async () => {
   // to the test D1 database before any test runs.
   const migrations = await readD1Migrations("./migrations");
   return {
-    plugins: [cloudflareTest({ wrangler: { configPath: "./wrangler.jsonc" } })],
+    plugins: [
+      cloudflareTest({
+        wrangler: { configPath: "./wrangler.jsonc" },
+        miniflare: {
+          bindings: {
+            ADMIN_TOKEN: "test-admin",
+            ENVIRONMENT: "development",
+            STRIPE_WEBHOOK_SECRET: "test-wh-secret",
+          },
+        },
+      }),
+    ],
     test: {
       setupFiles: ["./tests/apply-migrations.ts"],
       provide: { TEST_MIGRATIONS: migrations },
