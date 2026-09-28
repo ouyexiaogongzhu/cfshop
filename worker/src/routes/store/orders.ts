@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { normalizeCountry, parseQuoteLines, type QuoteLine } from "../../lib/checkout-quote";
+import { DiscountError } from "../../lib/discounts";
 import {
   createStoreOrder,
   getStoreOrderByIdAndEmail,
@@ -138,6 +139,11 @@ export async function placePendingOrder(
   const cartId = usesCart ? getCookie(c, CART_COOKIE) : null;
   const cartStub = cartId ? c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)) : null;
 
+  const discountCode =
+    typeof body.discountCode === "string" && body.discountCode.trim().length > 0
+      ? body.discountCode.trim()
+      : null;
+
   try {
     if (cartStub) await cartStub.lock();
     const record = await createStoreOrder({
@@ -148,6 +154,7 @@ export async function placePendingOrder(
       lines,
       idempotencyKey: key,
       addressJson,
+      discountCode,
     });
     if (cartStub && record.created) {
       await cartStub.unlock();
@@ -159,6 +166,7 @@ export async function placePendingOrder(
   } catch (err) {
     if (cartStub) await cartStub.unlock();
     if (err instanceof InsufficientInventoryError) return c.json({ error: "insufficient_inventory" }, 409);
+    if (err instanceof DiscountError) return c.json({ error: err.message }, 400);
     if (err instanceof Error && (err.message === "not_found" || err.message === "invalid_request")) {
       return c.json({ error: err.message }, err.message === "not_found" ? 404 : 400);
     }

@@ -37,6 +37,17 @@ type PlacedOrder = {
   total: number;
 };
 
+type CheckoutPreview = {
+  preview?: boolean;
+  currency?: string;
+  subtotal?: number;
+  shipping?: number;
+  tax?: number;
+  total?: number;
+  discountCode?: string | null;
+  discountAmount?: number;
+};
+
 const FALLBACK_METHODS: ShippingMethod[] = [
   {
     id: "ship_hk",
@@ -87,6 +98,11 @@ export function CheckoutForm() {
   );
   const [shippingMethodId, setShippingMethodId] = useState("ship_hk");
   const [savedAddresses, setSavedAddresses] = useState<Address[]>([]);
+  const [discountCode, setDiscountCode] = useState("");
+  const [appliedCode, setAppliedCode] = useState<string | null>(null);
+  const [preview, setPreview] = useState<CheckoutPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewPending, setPreviewPending] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -162,15 +178,74 @@ export function CheckoutForm() {
   }, [country]);
 
   const shippingAmount = useMemo(() => {
+    if (typeof preview?.shipping === "number") return preview.shipping;
     return methods.find((m) => m.id === shippingMethodId)?.amount ?? 0;
-  }, [methods, shippingMethodId]);
+  }, [methods, shippingMethodId, preview]);
 
   const subtotal = useMemo(() => {
+    if (typeof preview?.subtotal === "number") return preview.subtotal;
     return (cart?.items ?? []).reduce(
       (sum, item) => sum + (item.unitAmount ?? 0) * item.qty,
       0,
     );
-  }, [cart]);
+  }, [cart, preview]);
+
+  const discountAmount = useMemo(() => {
+    const amount = preview?.discountAmount;
+    return typeof amount === "number" && amount > 0 ? amount : 0;
+  }, [preview]);
+
+  const total = useMemo(() => {
+    if (typeof preview?.total === "number") return preview.total;
+    return Math.max(0, subtotal + shippingAmount - discountAmount);
+  }, [preview, subtotal, shippingAmount, discountAmount]);
+
+  async function applyDiscountCode() {
+    const code = discountCode.trim();
+    setPreviewError(null);
+    if (!code) {
+      setAppliedCode(null);
+      setPreview(null);
+      return;
+    }
+    setPreviewPending(true);
+    try {
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          shippingMethodId,
+          country,
+          email: email.trim() || undefined,
+          discountCode: code,
+        }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (body?.error === "invalid_discount" || body?.error === "discount_invalid") {
+          throw new Error("That discount code is not valid.");
+        }
+        throw new Error("Could not apply discount code.");
+      }
+      const data = (await res.json()) as CheckoutPreview;
+      setPreview(data);
+      setAppliedCode(
+        typeof data.discountCode === "string" && data.discountCode
+          ? data.discountCode
+          : code,
+      );
+      if (!(typeof data.discountAmount === "number" && data.discountAmount > 0)) {
+        setPreviewError("Code accepted, but no discount was applied.");
+      }
+    } catch (err) {
+      setPreview(null);
+      setAppliedCode(null);
+      setPreviewError(err instanceof Error ? err.message : "Could not apply code.");
+    } finally {
+      setPreviewPending(false);
+    }
+  }
 
   function applySaved(address: Address) {
     setName(address.name);
@@ -203,6 +278,7 @@ export function CheckoutForm() {
             email,
             shippingMethodId,
             country,
+            discountCode: appliedCode ?? (discountCode.trim() || undefined),
             address: {
               name,
               line1,
@@ -219,6 +295,9 @@ export function CheckoutForm() {
           if (body?.error === "empty_cart") throw new Error("Your cart is empty.");
           if (body?.error === "insufficient_inventory") {
             throw new Error("Some items are out of stock.");
+          }
+          if (body?.error === "invalid_discount" || body?.error === "discount_invalid") {
+            throw new Error("That discount code is not valid.");
           }
           throw new Error("Could not place order. Check your details.");
         }
@@ -332,7 +411,11 @@ export function CheckoutForm() {
               <button
                 key={method.id}
                 type="button"
-                onClick={() => setShippingMethodId(method.id)}
+                onClick={() => {
+                  setShippingMethodId(method.id);
+                  setPreview(null);
+                  setAppliedCode(null);
+                }}
                 className={
                   method.id === shippingMethodId
                     ? "rounded-md border border-foreground bg-foreground px-3 py-1.5 text-sm text-background"
@@ -343,6 +426,37 @@ export function CheckoutForm() {
               </button>
             ))}
           </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Discount code</h2>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              className="min-w-0 flex-1 uppercase"
+              placeholder="Code"
+              value={discountCode}
+              onChange={(e) => setDiscountCode(e.target.value)}
+              autoComplete="off"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              disabled={previewPending}
+              onClick={() => void applyDiscountCode()}
+            >
+              {previewPending ? "Applying…" : "Apply"}
+            </Button>
+          </div>
+          {previewError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {previewError}
+            </p>
+          ) : null}
+          {appliedCode && discountAmount > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Applied {appliedCode}
+            </p>
+          ) : null}
         </section>
       </div>
 
@@ -370,9 +484,15 @@ export function CheckoutForm() {
             <span>Shipping</span>
             <span className="tabular-nums">{formatPrice(shippingAmount)}</span>
           </div>
+          {discountAmount > 0 ? (
+            <div className="flex justify-between text-muted-foreground">
+              <span>Discount{appliedCode ? ` (${appliedCode})` : ""}</span>
+              <span className="tabular-nums">−{formatPrice(discountAmount)}</span>
+            </div>
+          ) : null}
           <div className="flex justify-between font-medium">
             <span>Total</span>
-            <span className="tabular-nums">{formatPrice(subtotal + shippingAmount)}</span>
+            <span className="tabular-nums">{formatPrice(total)}</span>
           </div>
         </div>
         <p className="text-xs text-muted-foreground">

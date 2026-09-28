@@ -3,6 +3,7 @@ import { ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CartCountBadge } from "@/components/cart-count-badge";
 import { AuthNav } from "@/components/auth-nav";
+import { SiteSearch } from "@/components/site-search";
 
 export function SiteHeader() {
   return (
@@ -22,6 +23,7 @@ export function SiteHeader() {
           </nav>
         </div>
         <div className="flex items-center gap-2">
+          <SiteSearch />
           <AuthNav />
           <Button
             variant="ghost"

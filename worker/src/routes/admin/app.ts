@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../../lib/admin";
 import { reconcileInventoryDoAvailable } from "../../lib/inventory-do";
+import { customerRoutes } from "./customers";
+import { discountRoutes } from "./discounts";
 
 declare global {
   interface Env {
@@ -12,6 +14,8 @@ declare global {
 export const adminRoutes = new Hono<{ Bindings: Env }>();
 
 adminRoutes.use("*", requireAdmin);
+adminRoutes.route("/", discountRoutes);
+adminRoutes.route("/", customerRoutes);
 
 type ProductStatus = "draft" | "active" | "archived";
 
@@ -350,6 +354,195 @@ adminRoutes.patch("/products/:id", async (c) => {
     description: row.description,
     status: row.status,
     imageKey: row.image_key,
+  });
+});
+
+adminRoutes.post("/products/:id/variants", async (c) => {
+  let body: unknown;
+  try {
+    body = await readJson(c.req.raw);
+  } catch {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (!isRecord(body)) return c.json({ error: "bad_request" }, 400);
+
+  const sku = body.sku;
+  const options = body.options;
+  const price = body.price;
+  const available = body.available;
+  if (typeof sku !== "string" || sku.length === 0) return c.json({ error: "bad_request" }, 400);
+  if (options !== undefined && !isRecord(options)) return c.json({ error: "bad_request" }, 400);
+  if (!isInteger(price) || price < 0) return c.json({ error: "bad_request" }, 400);
+  if (available !== undefined && (!isInteger(available) || available < 0)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+
+  const productId = c.req.param("id");
+  const db = c.env.DB;
+  const product = await db
+    .prepare(`SELECT id FROM products WHERE id = ?`)
+    .bind(productId)
+    .first<{ id: string }>();
+  if (!product) return c.json({ error: "not_found" }, 404);
+
+  const variantId = crypto.randomUUID();
+  const stock = available === undefined ? 0 : available;
+  try {
+    await db.batch([
+      db
+        .prepare(
+          `INSERT INTO product_variants (id, product_id, sku, options)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind(variantId, productId, sku, JSON.stringify(options ?? {})),
+      db
+        .prepare(
+          `INSERT INTO prices (id, variant_id, currency, amount)
+           VALUES (?, ?, 'usd', ?)`
+        )
+        .bind(crypto.randomUUID(), variantId, price),
+      db.prepare(`INSERT INTO inventory (variant_id, available) VALUES (?, ?)`).bind(variantId, stock),
+    ]);
+  } catch (err) {
+    if (isUniqueViolation(err)) return c.json({ error: "conflict" }, 409);
+    throw err;
+  }
+
+  await reconcileInventoryDoAvailable(c.env, variantId, stock);
+
+  return c.json(
+    {
+      id: variantId,
+      productId,
+      sku,
+      options: options ?? {},
+      price,
+      available: stock,
+    },
+    201
+  );
+});
+
+adminRoutes.patch("/variants/:id", async (c) => {
+  let body: unknown;
+  try {
+    body = await readJson(c.req.raw);
+  } catch {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (!isRecord(body)) return c.json({ error: "bad_request" }, 400);
+
+  const variantId = c.req.param("id");
+  const db = c.env.DB;
+  const existing = await db
+    .prepare(`SELECT id, product_id, sku, options FROM product_variants WHERE id = ?`)
+    .bind(variantId)
+    .first<{ id: string; product_id: string; sku: string; options: string }>();
+  if (!existing) return c.json({ error: "not_found" }, 404);
+
+  const sku = body.sku;
+  const options = body.options;
+  const price = body.price;
+  const available = body.available;
+
+  if (sku !== undefined && (typeof sku !== "string" || sku.length === 0)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (options !== undefined && !isRecord(options)) return c.json({ error: "bad_request" }, 400);
+  if (price !== undefined && (!isInteger(price) || price < 0)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (available !== undefined && (!isInteger(available) || available < 0)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+
+  const statements: D1PreparedStatement[] = [];
+  if (sku !== undefined || options !== undefined) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE product_variants SET sku = ?, options = ? WHERE id = ?`
+        )
+        .bind(
+          typeof sku === "string" ? sku : existing.sku,
+          options !== undefined ? JSON.stringify(options) : existing.options,
+          variantId
+        )
+    );
+  }
+  if (price !== undefined) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO prices (id, variant_id, currency, amount)
+           VALUES (?, ?, 'usd', ?)
+           ON CONFLICT(variant_id, currency) DO UPDATE SET amount = excluded.amount`
+        )
+        .bind(crypto.randomUUID(), variantId, price)
+    );
+  }
+  if (available !== undefined) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO inventory (variant_id, available, updated_at)
+           VALUES (?, ?, datetime('now'))
+           ON CONFLICT(variant_id) DO UPDATE SET
+             available = excluded.available,
+             updated_at = datetime('now')`
+        )
+        .bind(variantId, available)
+    );
+  }
+
+  if (statements.length > 0) {
+    try {
+      await db.batch(statements);
+    } catch (err) {
+      if (isUniqueViolation(err)) return c.json({ error: "conflict" }, 409);
+      throw err;
+    }
+  }
+
+  if (available !== undefined) {
+    await reconcileInventoryDoAvailable(c.env, variantId, available);
+  }
+
+  const row = await db
+    .prepare(
+      `SELECT v.id, v.product_id, v.sku, v.options, pr.amount AS price, COALESCE(i.available, 0) AS available
+       FROM product_variants v
+       LEFT JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
+       LEFT JOIN inventory i ON i.variant_id = v.id
+       WHERE v.id = ?`
+    )
+    .bind(variantId)
+    .first<{
+      id: string;
+      product_id: string;
+      sku: string;
+      options: string;
+      price: number | null;
+      available: number;
+    }>();
+
+  let parsedOptions: Record<string, unknown> | string = {};
+  try {
+    const parsed: unknown = JSON.parse(row?.options ?? "{}");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      parsedOptions = parsed as Record<string, unknown>;
+    }
+  } catch {
+    parsedOptions = row?.options ?? "{}";
+  }
+
+  return c.json({
+    id: row!.id,
+    productId: row!.product_id,
+    sku: row!.sku,
+    options: parsedOptions,
+    price: row!.price === null ? null : Number(row!.price),
+    available: Number(row!.available),
   });
 });
 

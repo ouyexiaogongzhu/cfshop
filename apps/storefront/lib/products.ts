@@ -113,6 +113,26 @@ export async function listProducts(opts?: { category?: string }): Promise<Produc
 }
 
 /**
+ * Product search from GET /api/store/products/search?q=.
+ * Soft-fails to [] when the API is unreachable or returns non-OK.
+ */
+export async function searchProducts(q: string): Promise<Product[]> {
+  const query = q.trim();
+  if (!query) return [];
+  try {
+    const res = await storeFetch(
+      `/api/store/products/search?q=${encodeURIComponent(query)}`,
+    );
+    if (!res.ok) return [];
+    const data: unknown = await res.json();
+    if (!Array.isArray(data)) return [];
+    return data.map((row) => mapListItem(row as ApiProductListItem));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Product detail from GET /api/store/products/:slug.
  * Soft-fails to null on 404 / network errors (use with notFound()).
  */

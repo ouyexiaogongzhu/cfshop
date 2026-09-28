@@ -4,10 +4,13 @@ type Params = { params: Promise<{ path: string[] }> };
 
 /** Only forward known admin surfaces — blocks open proxy to future admin routes. */
 const ALLOWED = [
-  /^products(?:\/[A-Za-z0-9_-]+)?$/,
+  /^products(?:\/[A-Za-z0-9_-]+(?:\/variants)?)?$/,
   /^inventory\/[A-Za-z0-9_-]+$/,
   /^orders(?:\/[A-Za-z0-9_-]+(?:\/shipments)?)?$/,
   /^media$/,
+  /^discounts(?:\/[A-Za-z0-9_-]+)?$/,
+  /^customers(?:\/[^/]+\/orders)?$/,
+  /^variants\/[A-Za-z0-9_-]+$/,
 ];
 
 function isAllowedOpsPath(path: string): boolean {

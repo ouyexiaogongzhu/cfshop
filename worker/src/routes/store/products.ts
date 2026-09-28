@@ -4,6 +4,7 @@ import {
   listActiveProducts,
   listProductVariants,
   parseOptions,
+  searchProducts,
 } from "../../domains/product/queries";
 import { jsonError } from "../../lib/errors";
 
@@ -24,6 +25,13 @@ productRoutes.get("/products", async (c) => {
   const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
   const category = c.req.query("category")?.trim() || null;
   const results = await listActiveProducts(c.env.DB, limit, offset, category);
+  return c.json(results.map(withImageUrl));
+});
+
+productRoutes.get("/products/search", async (c) => {
+  const q = c.req.query("q") ?? "";
+  const limit = Math.min(Number(c.req.query("limit") ?? 20) || 20, 100);
+  const results = await searchProducts(c.env.DB, q, limit);
   return c.json(results.map(withImageUrl));
 });
 

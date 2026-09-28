@@ -38,6 +38,8 @@ type Preview = {
   payment: string;
   currency: string;
   subtotal: number;
+  discountCode: string | null;
+  discountAmount: number;
   shipping: number;
   tax: number;
   total: number;
@@ -350,6 +352,8 @@ describe("checkout preview", () => {
       payment: "unavailable",
       currency: "usd",
       subtotal,
+      discountCode: null,
+      discountAmount: 0,
       shipping: 500,
       tax: 0,
       total: subtotal + 500,
@@ -388,6 +392,8 @@ describe("checkout preview", () => {
       payment: "unavailable",
       currency: "usd",
       subtotal,
+      discountCode: null,
+      discountAmount: 0,
       shipping: 2500,
       tax: 0,
       total: subtotal + 2500,

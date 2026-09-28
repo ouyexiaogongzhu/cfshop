@@ -1,5 +1,6 @@
 import type { CheckoutQuote, QuoteLine } from "./checkout-quote";
 import { buildCheckoutQuote } from "./checkout-quote";
+import { DiscountError } from "./discounts";
 import {
   releaseOrderReservations,
   reservationIdForOrderLine,
@@ -32,6 +33,7 @@ export type CreateStoreOrderInput = {
   lines: QuoteLine[];
   idempotencyKey?: string;
   addressJson?: string;
+  discountCode?: string | null;
 };
 
 type OrderRow = {
@@ -45,6 +47,8 @@ type OrderRow = {
   total: number;
   shipping_method_id: string | null;
   address_json: string | null;
+  discount_code: string | null;
+  discount_amount: number;
 };
 
 async function loadOrderQuote(env: Env, order: OrderRow): Promise<CheckoutQuote> {
@@ -57,6 +61,8 @@ async function loadOrderQuote(env: Env, order: OrderRow): Promise<CheckoutQuote>
   return {
     currency: "usd",
     subtotal: Number(order.subtotal),
+    discountCode: order.discount_code ?? null,
+    discountAmount: Number(order.discount_amount ?? 0),
     shipping: Number(order.shipping_amount),
     tax: Number(order.tax),
     total: Number(order.total),
@@ -74,7 +80,8 @@ async function loadOrderQuote(env: Env, order: OrderRow): Promise<CheckoutQuote>
 
 async function loadOrderById(env: Env, orderId: string): Promise<StoreOrderRecord | null> {
   const order = await env.DB.prepare(
-    `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total, shipping_method_id, address_json
+    `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total,
+            shipping_method_id, address_json, discount_code, discount_amount
      FROM orders WHERE id = ?`
   )
     .bind(orderId)
@@ -134,7 +141,8 @@ export async function getStoreOrderByIdAndEmail(
 }
 
 export async function createStoreOrder(input: CreateStoreOrderInput): Promise<StoreOrderRecord> {
-  const { env, email, shippingMethodId, country, lines, idempotencyKey, addressJson } = input;
+  const { env, email, shippingMethodId, country, lines, idempotencyKey, addressJson, discountCode } =
+    input;
   const normalizedEmail = email.trim().toLowerCase();
 
   if (idempotencyKey) {
@@ -142,7 +150,19 @@ export async function createStoreOrder(input: CreateStoreOrderInput): Promise<St
     if (existing) return existing;
   }
 
-  const quoteResult = await buildCheckoutQuote(env.DB, { shippingMethodId, country, lines });
+  let quoteResult: Awaited<ReturnType<typeof buildCheckoutQuote>>;
+  try {
+    quoteResult = await buildCheckoutQuote(env.DB, {
+      shippingMethodId,
+      country,
+      lines,
+      discountCode: discountCode ?? null,
+      email: normalizedEmail,
+    });
+  } catch (err) {
+    if (err instanceof DiscountError) throw err;
+    throw err;
+  }
   if (quoteResult === "invalid") throw new Error("invalid_request");
   if (quoteResult === "not_found") throw new Error("not_found");
   const quote = quoteResult;
@@ -172,8 +192,9 @@ export async function createStoreOrder(input: CreateStoreOrderInput): Promise<St
     const statements: D1PreparedStatement[] = [
       env.DB.prepare(
         `INSERT INTO orders (
-           id, email, status, currency, subtotal, shipping_amount, shipping_method_id, tax, total, address_json
-         ) VALUES (?, ?, 'pending', 'usd', ?, ?, ?, ?, ?, ?)`
+           id, email, status, currency, subtotal, shipping_amount, shipping_method_id,
+           tax, total, address_json, discount_code, discount_amount
+         ) VALUES (?, ?, 'pending', 'usd', ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         orderId,
         normalizedEmail,
@@ -182,7 +203,9 @@ export async function createStoreOrder(input: CreateStoreOrderInput): Promise<St
         quote.shippingMethodId,
         quote.tax,
         quote.total,
-        addressJson ?? JSON.stringify({ country })
+        addressJson ?? JSON.stringify({ country }),
+        quote.discountCode,
+        quote.discountAmount
       ),
     ];
 
@@ -198,6 +221,23 @@ export async function createStoreOrder(input: CreateStoreOrderInput): Promise<St
            WHERE variant_id = ?`
         ).bind(line.qty, line.qty, line.variantId)
       );
+    }
+
+    if (quote.discountCode && quote.discountAmount > 0) {
+      const discount = await env.DB.prepare(`SELECT id FROM discounts WHERE code = ?`)
+        .bind(quote.discountCode)
+        .first<{ id: string }>();
+      if (discount) {
+        statements.push(
+          env.DB.prepare(
+            `INSERT INTO discount_usage (id, discount_id, order_id, customer_email, discount_amount_cents)
+             VALUES (?, ?, ?, ?, ?)`
+          ).bind(crypto.randomUUID(), discount.id, orderId, normalizedEmail, quote.discountAmount),
+          env.DB.prepare(
+            `UPDATE discounts SET usage_count = usage_count + 1 WHERE id = ?`
+          ).bind(discount.id)
+        );
+      }
     }
 
     if (idempotencyKey) {
@@ -236,6 +276,8 @@ export function orderResponseBody(record: StoreOrderRecord): Record<string, unkn
     email: record.email,
     currency: quote.currency,
     subtotal: quote.subtotal,
+    discountCode: quote.discountCode,
+    discountAmount: quote.discountAmount,
     shipping: quote.shipping,
     tax: quote.tax,
     total: quote.total,

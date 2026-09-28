@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { getCookie } from "hono/cookie";
 import { buildCheckoutQuote, normalizeCountry, parseQuoteLines, type QuoteLine } from "../../lib/checkout-quote";
+import { DiscountError } from "../../lib/discounts";
 import { orderResponseBody, type StoreOrderRecord } from "../../lib/orders";
 import { PaymentUnavailableError, resolvePaymentProvider } from "../../lib/payments";
 import { placePendingOrder } from "./orders";
@@ -63,11 +64,28 @@ checkoutRoutes.post("/checkout", async (c) => {
   if (lines === "invalid") return c.json({ error: "invalid_request" }, 400);
   if (lines === "empty_cart") return c.json({ error: "empty_cart" }, 400);
 
-  const quote = await buildCheckoutQuote(c.env.DB, {
-    shippingMethodId: body.shippingMethodId,
-    country,
-    lines,
-  });
+  const discountCode =
+    typeof body.discountCode === "string" && body.discountCode.trim().length > 0
+      ? body.discountCode.trim()
+      : null;
+  const email =
+    typeof body.email === "string" && body.email.trim().length > 0
+      ? body.email.trim().toLowerCase()
+      : null;
+
+  let quote: Awaited<ReturnType<typeof buildCheckoutQuote>>;
+  try {
+    quote = await buildCheckoutQuote(c.env.DB, {
+      shippingMethodId: body.shippingMethodId,
+      country,
+      lines,
+      discountCode,
+      email,
+    });
+  } catch (err) {
+    if (err instanceof DiscountError) return c.json({ error: err.message }, 400);
+    throw err;
+  }
   if (quote === "not_found") return c.json({ error: "not_found" }, 404);
   if (quote === "invalid") return c.json({ error: "invalid_request" }, 400);
 
@@ -76,6 +94,8 @@ checkoutRoutes.post("/checkout", async (c) => {
     payment: "unavailable",
     currency: quote.currency,
     subtotal: quote.subtotal,
+    discountCode: quote.discountCode,
+    discountAmount: quote.discountAmount,
     shipping: quote.shipping,
     tax: quote.tax,
     total: quote.total,

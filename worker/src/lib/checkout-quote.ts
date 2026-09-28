@@ -1,3 +1,5 @@
+import { applyDiscountCode, DiscountError } from "./discounts";
+
 export type QuoteLine = { variantId: string; qty: number };
 
 export type PricedLine = QuoteLine & {
@@ -9,6 +11,8 @@ export type PricedLine = QuoteLine & {
 export type CheckoutQuote = {
   currency: "usd";
   subtotal: number;
+  discountCode: string | null;
+  discountAmount: number;
   shipping: number;
   tax: number;
   total: number;
@@ -21,6 +25,8 @@ export type QuoteInput = {
   shippingMethodId: string;
   country: string | null;
   lines: QuoteLine[];
+  discountCode?: string | null;
+  email?: string | null;
 };
 
 export function asCents(value: unknown): number | null {
@@ -130,13 +136,41 @@ export async function buildCheckoutQuote(
   const shipping = asCents(method.amount);
   if (shipping === null) return "not_found";
 
+  let discountCode: string | null = null;
+  let discountAmount = 0;
+  const rawCode = typeof input.discountCode === "string" ? input.discountCode.trim() : "";
+  if (rawCode) {
+    try {
+      const applied = await applyDiscountCode(
+        db,
+        rawCode,
+        subtotal,
+        input.email ?? undefined
+      );
+      discountCode = applied.code;
+      discountAmount = applied.amount;
+    } catch (err) {
+      if (err instanceof DiscountError) throw err;
+      throw err;
+    }
+  }
+
   const tax = 0;
-  const total = subtotal + shipping + tax;
-  if (!Number.isSafeInteger(subtotal) || !Number.isSafeInteger(total)) return "invalid";
+  const total = subtotal - discountAmount + shipping + tax;
+  if (
+    !Number.isSafeInteger(subtotal) ||
+    !Number.isSafeInteger(discountAmount) ||
+    !Number.isSafeInteger(total) ||
+    total < 0
+  ) {
+    return "invalid";
+  }
 
   return {
     currency: "usd",
     subtotal,
+    discountCode,
+    discountAmount,
     shipping,
     tax,
     total,

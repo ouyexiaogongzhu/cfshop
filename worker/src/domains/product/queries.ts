@@ -1,3 +1,5 @@
+import { sanitizeFtsQuery } from "../../lib/fts";
+
 export type ProductListItem = {
   id: string;
   slug: string;
@@ -82,6 +84,32 @@ export async function getActiveProductBySlug(
     )
     .bind(slug)
     .first<ProductDetail>();
+}
+
+/** Active products matching an FTS5 query (prefix tokens). Empty/invalid q → []. */
+export async function searchProducts(
+  db: D1Database,
+  q: string,
+  limit: number
+): Promise<ProductListItem[]> {
+  const match = sanitizeFtsQuery(q);
+  if (!match) return [];
+
+  const { results } = await db
+    .prepare(
+      `SELECT p.id, p.slug, p.title, p.image_key AS imageKey, MIN(pr.amount) AS price, ${CATEGORY_EXPR} AS category
+       FROM products p
+       JOIN products_fts ON products_fts.rowid = p.rowid
+       JOIN product_variants v ON v.product_id = p.id
+       JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
+       WHERE p.status = 'active' AND products_fts MATCH ?
+       GROUP BY p.id
+       ORDER BY p.created_at
+       LIMIT ?`
+    )
+    .bind(match, limit)
+    .all<ProductListItem>();
+  return results ?? [];
 }
 
 /** Variants + prices + stock for a product (all currencies). */
