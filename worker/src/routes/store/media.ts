@@ -6,8 +6,9 @@ export const mediaRoutes = new Hono<{ Bindings: Env }>();
 
 const KEY_RE = /^products\/[a-zA-Z0-9._/-]+$/;
 
-mediaRoutes.get("/media/*", async (c) => {
-  const key = decodeURIComponent(c.req.param("*") ?? "");
+/** Serve object key under /api/store/media/<key> (key may contain slashes). */
+mediaRoutes.get("/media/:key{.+}", async (c) => {
+  const key = decodeURIComponent(c.req.param("key") ?? "");
   if (!key || key.includes("..") || !KEY_RE.test(key)) {
     return jsonError(c, 400, "invalid_key");
   }
