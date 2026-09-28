@@ -74,6 +74,8 @@ describe("GET /api/store/products", () => {
       title: "Plain Mug",
       price: 1800,
       category: "Goods",
+      imageKey: null,
+      imageUrl: null,
     });
     expect(products.find((p) => p.slug === apparelSlug)).toEqual({
       id: apparel.id,
@@ -81,6 +83,8 @@ describe("GET /api/store/products", () => {
       title: "Logo Tee",
       price: 2500,
       category: "Apparel",
+      imageKey: null,
+      imageUrl: null,
     });
   });
 });
@@ -109,6 +113,8 @@ describe("GET /api/store/products/:slug", () => {
       title: "Detail Tee",
       description: "desc",
       category: "Apparel",
+      imageKey: null,
+      imageUrl: null,
       variants: [
         {
           id: expect.any(String),

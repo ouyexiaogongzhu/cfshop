@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ProductPurchase } from "@/components/product-purchase";
+import { ProductImage } from "@/components/product-image";
 import { getProduct } from "@/lib/products";
 
 export async function generateMetadata({
@@ -24,11 +25,12 @@ export default async function ProductPage({
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
       <div className="grid grid-cols-1 gap-10 md:grid-cols-2">
-        <div className="flex aspect-square items-center justify-center rounded-lg border bg-muted">
-          <span className="text-xs text-muted-foreground">
-            {product.category ?? "Product"}
-          </span>
-        </div>
+        <ProductImage
+          src={product.imageUrl}
+          alt={product.name}
+          category={product.category}
+          className="rounded-lg border"
+        />
 
         <div className="flex flex-col">
           {product.category ? (
@@ -41,7 +43,7 @@ export default async function ProductPage({
           </h1>
           <Separator className="my-6" />
           {product.description ? (
-            <p className="text-muted-foreground leading-relaxed">
+            <p className="leading-relaxed text-muted-foreground">
               {product.description}
             </p>
           ) : null}

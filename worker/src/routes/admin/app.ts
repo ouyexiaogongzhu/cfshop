@@ -35,6 +35,23 @@ type ProductRow = {
   title: string;
   description: string;
   status: ProductStatus;
+  image_key: string | null;
+};
+
+type AdminProductListRow = {
+  id: string;
+  slug: string;
+  title: string;
+  status: ProductStatus;
+  image_key: string | null;
+  updated_at: string;
+};
+
+type AdminVariantRow = {
+  id: string;
+  product_id: string;
+  sku: string;
+  available: number | null;
 };
 
 type OrderRow = {
@@ -128,6 +145,62 @@ function pageOffset(raw: string | undefined): number {
   return n;
 }
 
+adminRoutes.get("/products", async (c) => {
+  const limit = pageLimit(c.req.query("limit"));
+  const offset = pageOffset(c.req.query("offset"));
+  const db = c.env.DB;
+  const { results: products } = await db
+    .prepare(
+      `SELECT id, slug, title, status, image_key, updated_at
+       FROM products
+       ORDER BY updated_at DESC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(limit, offset)
+    .all<AdminProductListRow>();
+
+  const ids = (products ?? []).map((p) => p.id);
+  let variants: AdminVariantRow[] = [];
+  if (ids.length > 0) {
+    const placeholders = ids.map(() => "?").join(",");
+    const { results } = await db
+      .prepare(
+        `SELECT v.id, v.product_id, v.sku, i.available
+         FROM product_variants v
+         LEFT JOIN inventory i ON i.variant_id = v.id
+         WHERE v.product_id IN (${placeholders})
+         ORDER BY v.sku`
+      )
+      .bind(...ids)
+      .all<AdminVariantRow>();
+    variants = results ?? [];
+  }
+
+  const byProduct = new Map<string, AdminVariantRow[]>();
+  for (const v of variants) {
+    const list = byProduct.get(v.product_id) ?? [];
+    list.push(v);
+    byProduct.set(v.product_id, list);
+  }
+
+  return c.json(
+    (products ?? []).map((p) => ({
+      id: p.id,
+      slug: p.slug,
+      title: p.title,
+      status: p.status,
+      imageKey: p.image_key,
+      imageUrl: p.image_key ? `/api/media/${p.image_key}` : null,
+      updatedAt: p.updated_at,
+      variants: (byProduct.get(p.id) ?? []).map((v) => ({
+        id: v.id,
+        sku: v.sku,
+        available: v.available ?? 0,
+      })),
+    }))
+  );
+});
+
 adminRoutes.post("/products", async (c) => {
   let body: unknown;
   try {
@@ -193,6 +266,7 @@ adminRoutes.patch("/products/:id", async (c) => {
   const title = body.title;
   const description = body.description;
   const status = body.status;
+  const imageKey = body.imageKey;
   if (title !== undefined && (typeof title !== "string" || title.length === 0)) {
     return c.json({ error: "bad_request" }, 400);
   }
@@ -200,6 +274,15 @@ adminRoutes.patch("/products/:id", async (c) => {
     return c.json({ error: "bad_request" }, 400);
   }
   if (status !== undefined && !isProductStatus(status)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (
+    imageKey !== undefined &&
+    imageKey !== null &&
+    (typeof imageKey !== "string" ||
+      imageKey.includes("..") ||
+      !/^products\/[a-zA-Z0-9._/-]+$/.test(imageKey))
+  ) {
     return c.json({ error: "bad_request" }, 400);
   }
 
@@ -219,26 +302,84 @@ adminRoutes.patch("/products/:id", async (c) => {
     sets.push("status = ?");
     binds.push(status);
   }
+  if (imageKey === null) {
+    sets.push("image_key = NULL");
+  } else if (typeof imageKey === "string") {
+    sets.push("image_key = ?");
+    binds.push(imageKey);
+  }
 
   if (sets.length === 0) {
     const row = await db
-      .prepare(`SELECT id, slug, title, description, status FROM products WHERE id = ?`)
+      .prepare(
+        `SELECT id, slug, title, description, status, image_key FROM products WHERE id = ?`
+      )
       .bind(id)
       .first<ProductRow>();
     if (!row) return c.json({ error: "not_found" }, 404);
-    return c.json(row);
+    return c.json({
+      id: row.id,
+      slug: row.slug,
+      title: row.title,
+      description: row.description,
+      status: row.status,
+      imageKey: row.image_key,
+    });
   }
 
   sets.push("updated_at = datetime('now')");
   const row = await db
     .prepare(
-      `UPDATE products SET ${sets.join(", ")} WHERE id = ? RETURNING id, slug, title, description, status`
+      `UPDATE products SET ${sets.join(", ")} WHERE id = ?
+       RETURNING id, slug, title, description, status, image_key`
     )
     .bind(...binds, id)
     .first<ProductRow>();
   if (!row) return c.json({ error: "not_found" }, 404);
-  return c.json(row);
+  return c.json({
+    id: row.id,
+    slug: row.slug,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    imageKey: row.image_key,
+  });
 });
+
+adminRoutes.post("/media", async (c) => {
+  const contentType = c.req.header("content-type") ?? "";
+  if (!contentType.includes("multipart/form-data")) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+
+  const form = await c.req.parseBody();
+  const file = form.file;
+  const keyField = form.key;
+  if (!(file instanceof File)) return c.json({ error: "bad_request" }, 400);
+  if (typeof keyField !== "string" || !keyField) return c.json({ error: "bad_request" }, 400);
+
+  const key = keyField.replace(/^\/+/, "");
+  if (key.includes("..") || !/^products\/[a-zA-Z0-9._/-]+$/.test(key)) {
+    return c.json({ error: "bad_request" }, 400);
+  }
+  if (file.size > 2_000_000) return c.json({ error: "too_large" }, 413);
+
+  await c.env.MEDIA.put(key, await file.arrayBuffer(), {
+    httpMetadata: {
+      contentType: file.type || guessUploadType(key),
+    },
+  });
+
+  return c.json({ key, imageUrl: `/api/media/${key}` }, 201);
+});
+
+function guessUploadType(key: string): string {
+  if (key.endsWith(".svg")) return "image/svg+xml";
+  if (key.endsWith(".png")) return "image/png";
+  if (key.endsWith(".jpg") || key.endsWith(".jpeg")) return "image/jpeg";
+  if (key.endsWith(".webp")) return "image/webp";
+  return "application/octet-stream";
+}
 
 adminRoutes.post("/inventory/:variantId", async (c) => {
   let body: unknown;

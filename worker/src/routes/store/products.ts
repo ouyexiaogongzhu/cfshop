@@ -9,12 +9,21 @@ import { jsonError } from "../../lib/errors";
 
 export const productRoutes = new Hono<{ Bindings: Env }>();
 
+function withImageUrl<T extends { imageKey: string | null }>(row: T) {
+  const { imageKey, ...rest } = row;
+  return {
+    ...rest,
+    imageKey,
+    imageUrl: imageKey ? `/api/media/${imageKey}` : null,
+  };
+}
+
 // Active products with cheapest USD price (integer cents) + category label.
 productRoutes.get("/products", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? 20) || 20, 100);
   const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
   const results = await listActiveProducts(c.env.DB, limit, offset);
-  return c.json(results);
+  return c.json(results.map(withImageUrl));
 });
 
 productRoutes.get("/products/:slug", async (c) => {
@@ -29,5 +38,5 @@ productRoutes.get("/products/:slug", async (c) => {
     currency: v.currency,
     amount: v.amount,
   }));
-  return c.json({ ...product, variants });
+  return c.json({ ...withImageUrl(product), variants });
 });

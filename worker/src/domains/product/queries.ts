@@ -4,6 +4,7 @@ export type ProductListItem = {
   title: string;
   price: number;
   category: string;
+  imageKey: string | null;
 };
 
 export type ProductVariantRow = {
@@ -20,6 +21,7 @@ export type ProductDetail = {
   title: string;
   description: string;
   category: string;
+  imageKey: string | null;
 };
 
 /** First linked category name, or `"Goods"` when the product has none. */
@@ -41,7 +43,7 @@ export async function listActiveProducts(
 ): Promise<ProductListItem[]> {
   const { results } = await db
     .prepare(
-      `SELECT p.id, p.slug, p.title, MIN(pr.amount) AS price, ${CATEGORY_EXPR} AS category
+      `SELECT p.id, p.slug, p.title, p.image_key AS imageKey, MIN(pr.amount) AS price, ${CATEGORY_EXPR} AS category
        FROM products p
        JOIN product_variants v ON v.product_id = p.id
        JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
@@ -62,7 +64,7 @@ export async function getActiveProductBySlug(
 ): Promise<ProductDetail | null> {
   return db
     .prepare(
-      `SELECT p.id, p.slug, p.title, p.description, ${CATEGORY_EXPR} AS category
+      `SELECT p.id, p.slug, p.title, p.description, p.image_key AS imageKey, ${CATEGORY_EXPR} AS category
        FROM products p
        WHERE p.slug = ? AND p.status = 'active'`
     )

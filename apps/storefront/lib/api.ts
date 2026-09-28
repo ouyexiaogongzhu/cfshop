@@ -52,7 +52,8 @@ async function resolveCloudflareEnv(): Promise<CloudflareEnv | null> {
  */
 export async function storeFetch(path: string, init?: RequestInit): Promise<Response> {
   const normalized = path.startsWith("/") ? path : `/${path}`;
-  const headers = mergeHeaders({ Accept: "application/json" }, init?.headers);
+  const headers = mergeHeaders(init?.headers);
+  if (!headers.has("Accept")) headers.set("Accept", "application/json");
   const nextInit: RequestInit = { ...init, headers };
 
   const cfEnv = await resolveCloudflareEnv();

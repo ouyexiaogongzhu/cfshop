@@ -24,6 +24,7 @@ export interface Product {
   price: number;
   category?: string;
   description?: string;
+  imageUrl?: string | null;
   variants?: ProductVariant[];
 }
 
@@ -33,6 +34,7 @@ interface ApiProductListItem {
   title: string;
   price: number;
   category?: string | null;
+  imageUrl?: string | null;
 }
 
 interface ApiProductDetail {
@@ -41,6 +43,7 @@ interface ApiProductDetail {
   title: string;
   description: string;
   category?: string | null;
+  imageUrl?: string | null;
   variants?: ProductVariant[];
 }
 
@@ -57,6 +60,7 @@ function mapListItem(item: ApiProductListItem): Product {
     name: item.title,
     price: item.price,
     category: normalizeCategory(item.category),
+    imageUrl: item.imageUrl ?? null,
   };
 }
 
@@ -72,6 +76,7 @@ function mapDetail(item: ApiProductDetail): Product {
     description: item.description ?? "",
     category: normalizeCategory(item.category),
     price,
+    imageUrl: item.imageUrl ?? null,
     variants,
   };
 }

@@ -8,6 +8,7 @@ import { authRoutes } from "./routes/store/auth";
 import { cartRoutes } from "./routes/store/cart";
 import { checkoutRoutes } from "./routes/store/checkout";
 import { orderRoutes } from "./routes/store/orders";
+import { mediaRoutes } from "./routes/store/media";
 import { productRoutes } from "./routes/store/products";
 import { shippingRoutes } from "./routes/store/shipping";
 import { stripeWebhookRoutes } from "./routes/webhooks/stripe";
@@ -51,6 +52,7 @@ app.get("/api/health", async (c) => {
 });
 
 app.route("/api/store", productRoutes);
+app.route("/api/store", mediaRoutes);
 app.route("/api/store", authRoutes);
 app.route("/api/store", addressRoutes);
 app.route("/api/store", cartRoutes);

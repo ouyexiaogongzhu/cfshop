@@ -72,6 +72,8 @@ describe("POST /api/admin/products", () => {
       title: "Heavy Tee",
       price: 2500,
       category: "Goods",
+      imageKey: null,
+      imageUrl: null,
     });
 
     const stored = await env.DB.prepare(
@@ -180,6 +182,7 @@ describe("PATCH /api/admin/products/:id", () => {
       title: "After",
       description: "Keep me",
       status: "active",
+      imageKey: null,
     });
   });
 

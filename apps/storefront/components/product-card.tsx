@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { AddToCartButton } from "@/components/add-to-cart-button";
+import { ProductImage } from "@/components/product-image";
 import { formatPrice, type Product } from "@/lib/products";
 
 export function ProductCard({ product }: { product: Product }) {
@@ -9,14 +10,14 @@ export function ProductCard({ product }: { product: Product }) {
   const variantId = product.variants?.[0]?.id;
 
   return (
-    <Card className="gap-4 pt-0 overflow-hidden">
+    <Card className="gap-4 overflow-hidden pt-0">
       <Link href={`/product/${product.slug}`} aria-label={product.name}>
-        {/* Neutral placeholder until real product imagery exists */}
-        <div className="flex aspect-square items-center justify-center bg-muted">
-          <span className="text-xs text-muted-foreground">
-            {product.category ?? "Product"}
-          </span>
-        </div>
+        <ProductImage
+          src={product.imageUrl}
+          alt={product.name}
+          category={product.category}
+          className="aspect-square rounded-none border-0"
+        />
       </Link>
       <CardContent className="space-y-1">
         <h3 className="font-medium leading-none">
@@ -24,7 +25,7 @@ export function ProductCard({ product }: { product: Product }) {
             {product.name}
           </Link>
         </h3>
-        <p className="text-sm text-muted-foreground tabular-nums">
+        <p className="text-sm tabular-nums text-muted-foreground">
           {formatPrice(product.price)}
         </p>
       </CardContent>
