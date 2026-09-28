@@ -24,6 +24,35 @@ type ShippingMethod = {
   selected: boolean;
 };
 
+const FALLBACK_METHODS: ShippingMethod[] = [
+  {
+    id: "ship_hk",
+    code: "hk",
+    title: "Hong Kong",
+    zone: "HK",
+    currency: "usd",
+    amount: 500,
+    selected: true,
+  },
+  {
+    id: "ship_intl",
+    code: "international",
+    title: "International",
+    zone: "INTL",
+    currency: "usd",
+    amount: 2500,
+    selected: false,
+  },
+];
+
+function methodsForCountry(country: string, methods: ShippingMethod[]): ShippingMethod[] {
+  const isHk = country.toUpperCase() === "HK";
+  return methods.map((method) => ({
+    ...method,
+    selected: isHk ? method.zone === "HK" : method.zone === "INTL",
+  }));
+}
+
 type CheckoutPreview = {
   preview: true;
   payment: string;
@@ -43,8 +72,10 @@ export function CartView() {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [country, setCountry] = useState("HK");
-  const [methods, setMethods] = useState<ShippingMethod[]>([]);
-  const [shippingMethodId, setShippingMethodId] = useState<string>("");
+  const [methods, setMethods] = useState<ShippingMethod[]>(() =>
+    methodsForCountry("HK", FALLBACK_METHODS),
+  );
+  const [shippingMethodId, setShippingMethodId] = useState<string>("ship_hk");
   const [preview, setPreview] = useState<CheckoutPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -70,17 +101,23 @@ export function CartView() {
       try {
         const res = await fetch(
           `/api/shipping-methods?country=${encodeURIComponent(country)}`,
-          { credentials: "include" },
+          { credentials: "include", cache: "no-store" },
         );
-        if (!res.ok) return;
+        if (!res.ok) throw new Error("shipping_failed");
         const data = (await res.json()) as { methods?: ShippingMethod[] };
         if (cancelled) return;
-        const nextMethods = data.methods ?? [];
+        const nextMethods =
+          data.methods && data.methods.length > 0
+            ? data.methods
+            : methodsForCountry(country, FALLBACK_METHODS);
         setMethods(nextMethods);
         const selected = nextMethods.find((m) => m.selected) ?? nextMethods[0];
-        setShippingMethodId(selected?.id ?? "");
+        setShippingMethodId(selected?.id ?? "ship_hk");
       } catch {
-        /* shipping UI is best-effort */
+        if (cancelled) return;
+        const fallback = methodsForCountry(country, FALLBACK_METHODS);
+        setMethods(fallback);
+        setShippingMethodId(fallback.find((m) => m.selected)?.id ?? "ship_hk");
       }
     })();
     return () => {
