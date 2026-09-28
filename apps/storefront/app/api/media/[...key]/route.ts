@@ -4,24 +4,34 @@ type Params = { params: Promise<{ key: string[] }> };
 
 /** Browser → storefront → API service binding → R2 (no public API hop). */
 export async function GET(_request: Request, { params }: Params) {
-  const { key: parts } = await params;
-  const key = parts.map(decodeURIComponent).join("/");
-  if (!key || key.includes("..")) {
-    return new Response("Bad Request", { status: 400 });
+  try {
+    const resolved = await params;
+    const parts = resolved.key ?? [];
+    const key = parts.map(decodeURIComponent).join("/");
+    if (!key || key.includes("..")) {
+      return new Response("Bad Request", { status: 400 });
+    }
+
+    const upstream = await storeFetch(`/api/store/media/${key}`, {
+      headers: { Accept: "*/*" },
+    });
+
+    // Buffer through the binding — streaming bodies can fail on OpenNext Workers.
+    const bytes = await upstream.arrayBuffer();
+    const headers = new Headers();
+    const contentType = upstream.headers.get("content-type");
+    if (contentType) headers.set("Content-Type", contentType);
+    const cacheControl = upstream.headers.get("cache-control");
+    headers.set(
+      "Cache-Control",
+      cacheControl ?? "public, max-age=86400, stale-while-revalidate=604800",
+    );
+    const etag = upstream.headers.get("etag");
+    if (etag) headers.set("ETag", etag);
+
+    return new Response(bytes, { status: upstream.status, headers });
+  } catch (err) {
+    console.error("media_proxy_failed", String(err));
+    return Response.json({ error: "media_proxy_failed" }, { status: 500 });
   }
-
-  const upstream = await storeFetch(`/api/store/media/${key}`, {
-    headers: { Accept: "*/*" },
-    cache: "force-cache",
-  });
-
-  const headers = new Headers();
-  const contentType = upstream.headers.get("content-type");
-  if (contentType) headers.set("Content-Type", contentType);
-  const cacheControl = upstream.headers.get("cache-control");
-  if (cacheControl) headers.set("Cache-Control", cacheControl);
-  const etag = upstream.headers.get("etag");
-  if (etag) headers.set("ETag", etag);
-
-  return new Response(upstream.body, { status: upstream.status, headers });
 }
