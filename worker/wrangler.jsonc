@@ -11,6 +11,7 @@
       "enabled": true
     }
   },
+  // All data plane access is via bindings (private CF network) — never public REST.
   "d1_databases": [
     {
       "binding": "DB",

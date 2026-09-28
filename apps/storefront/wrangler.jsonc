@@ -8,7 +8,8 @@
 		"directory": ".open-next/assets",
 		"binding": "ASSETS"
 	},
-	// Same-account RPC to the API Worker (Scalius-style). Local next dev still uses STORE_API_URL / localhost:8787.
+	// Internal Worker→Worker link (no public Internet / *.workers.dev hop).
+	// Local `next dev` uses STORE_API_URL or http://localhost:8787 instead.
 	"services": [
 		{
 			"binding": "API",

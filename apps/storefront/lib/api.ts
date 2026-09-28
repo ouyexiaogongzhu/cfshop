@@ -1,12 +1,13 @@
 /**
- * Base URL for the commerce API.
- * - Local `next dev`: http://localhost:8787 (override with STORE_API_URL)
- * - OpenNext Worker: prefer service binding `API` when present (see storeFetch)
+ * Commerce API access for the storefront Worker.
  *
- * Cart uses httpOnly `cfshop_cart` on the API origin. Local dual-origin
- * (next:3000 + worker:8787) goes through `app/api/cart/**` Route Handlers so
- * the browser stays same-site. Production keeps this BFF proxy + service binding.
+ * Production (OpenNext on Cloudflare): MUST use the `API` service binding to
+ * `cfshop-api`. That call stays on Cloudflare's network — it does not go out
+ * to the public Internet or *.workers.dev.
+ *
+ * Local `next dev` only: HTTP to STORE_API_URL / http://localhost:8787.
  */
+
 export function storeApiBase(): string {
   if (typeof process !== "undefined" && process.env.STORE_API_URL) {
     return process.env.STORE_API_URL.replace(/\/$/, "");
@@ -14,42 +15,58 @@ export function storeApiBase(): string {
   return "http://localhost:8787";
 }
 
-type ServiceFetcher = {
-  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-};
-
 function mergeHeaders(...parts: Array<HeadersInit | undefined>): Headers {
   const out = new Headers();
   for (const part of parts) {
     if (!part) continue;
-    const headers = new Headers(part);
-    headers.forEach((value, key) => {
+    new Headers(part).forEach((value, key) => {
       out.set(key, value);
     });
   }
   return out;
 }
 
+function assertNotPublicWorkersUrl(url: string): void {
+  if (/workers\.dev/i.test(url) || /cloudflareworkers\.com/i.test(url)) {
+    throw new Error(
+      "Refusing public Workers URL for store API; use the API service binding",
+    );
+  }
+}
+
+/** True when running inside the OpenNext Cloudflare Worker (not `next dev`). */
+async function resolveCloudflareEnv(): Promise<CloudflareEnv | null> {
+  try {
+    const { getCloudflareContext } = await import("@opennextjs/cloudflare");
+    const { env } = await getCloudflareContext({ async: true });
+    return env as CloudflareEnv;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Fetch the commerce API. Uses the `API` Workers service binding when available
- * (OpenNext on Cloudflare); otherwise HTTP to STORE_API_URL / localhost:8787.
+ * Fetch the commerce API.
+ * - Cloudflare runtime → `env.API` service binding only (internal).
+ * - Local Next.js → HTTP loopback / STORE_API_URL (never *.workers.dev).
  */
 export async function storeFetch(path: string, init?: RequestInit): Promise<Response> {
   const normalized = path.startsWith("/") ? path : `/${path}`;
   const headers = mergeHeaders({ Accept: "application/json" }, init?.headers);
   const nextInit: RequestInit = { ...init, headers };
 
-  try {
-    const { getCloudflareContext } = await import("@opennextjs/cloudflare");
-    const { env } = await getCloudflareContext({ async: true });
-    const api = (env as { API?: ServiceFetcher }).API;
-    if (api) {
-      return api.fetch(`https://cfshop-api${normalized}`, nextInit);
+  const cfEnv = await resolveCloudflareEnv();
+  if (cfEnv) {
+    if (!cfEnv.API) {
+      throw new Error(
+        "Missing env.API service binding to cfshop-api (configure wrangler.jsonc services)",
+      );
     }
-  } catch {
-    // Local next / SSG — no Cloudflare context; fall through to HTTP.
+    // Hostname is ignored; the Fetcher routes to cfshop-api on CF's private network.
+    return cfEnv.API.fetch(`http://cfshop-api${normalized}`, nextInit);
   }
 
   const url = path.startsWith("http") ? path : `${storeApiBase()}${normalized}`;
+  assertNotPublicWorkersUrl(url);
   return fetch(url, nextInit);
 }
