@@ -13,6 +13,7 @@ export type ProductVariantRow = {
   options: string;
   currency: string;
   amount: number;
+  available: number;
 };
 
 export type ProductDetail = {
@@ -39,20 +40,31 @@ const CATEGORY_EXPR = `COALESCE(
 export async function listActiveProducts(
   db: D1Database,
   limit: number,
-  offset: number
+  offset: number,
+  category?: string | null
 ): Promise<ProductListItem[]> {
+  const categoryFilter = category?.trim();
   const { results } = await db
     .prepare(
-      `SELECT p.id, p.slug, p.title, p.image_key AS imageKey, MIN(pr.amount) AS price, ${CATEGORY_EXPR} AS category
-       FROM products p
-       JOIN product_variants v ON v.product_id = p.id
-       JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
-       WHERE p.status = 'active'
-       GROUP BY p.id
-       ORDER BY p.created_at
-       LIMIT ? OFFSET ?`
+      categoryFilter
+        ? `SELECT p.id, p.slug, p.title, p.image_key AS imageKey, MIN(pr.amount) AS price, ${CATEGORY_EXPR} AS category
+           FROM products p
+           JOIN product_variants v ON v.product_id = p.id
+           JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
+           WHERE p.status = 'active' AND ${CATEGORY_EXPR} = ?
+           GROUP BY p.id
+           ORDER BY p.created_at
+           LIMIT ? OFFSET ?`
+        : `SELECT p.id, p.slug, p.title, p.image_key AS imageKey, MIN(pr.amount) AS price, ${CATEGORY_EXPR} AS category
+           FROM products p
+           JOIN product_variants v ON v.product_id = p.id
+           JOIN prices pr ON pr.variant_id = v.id AND pr.currency = 'usd'
+           WHERE p.status = 'active'
+           GROUP BY p.id
+           ORDER BY p.created_at
+           LIMIT ? OFFSET ?`
     )
-    .bind(limit, offset)
+    .bind(...(categoryFilter ? [categoryFilter, limit, offset] : [limit, offset]))
     .all<ProductListItem>();
   return results ?? [];
 }
@@ -72,16 +84,18 @@ export async function getActiveProductBySlug(
     .first<ProductDetail>();
 }
 
-/** Variants + prices for a product (all currencies). */
+/** Variants + prices + stock for a product (all currencies). */
 export async function listProductVariants(
   db: D1Database,
   productId: string
 ): Promise<ProductVariantRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT v.id, v.sku, v.options, pr.currency, pr.amount
+      `SELECT v.id, v.sku, v.options, pr.currency, pr.amount,
+              COALESCE(i.available, 0) AS available
        FROM product_variants v
        JOIN prices pr ON pr.variant_id = v.id
+       LEFT JOIN inventory i ON i.variant_id = v.id
        WHERE v.product_id = ?`
     )
     .bind(productId)

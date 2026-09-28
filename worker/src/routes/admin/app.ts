@@ -471,6 +471,64 @@ adminRoutes.get("/orders", async (c) => {
   );
 });
 
+adminRoutes.get("/orders/:id", async (c) => {
+  const orderId = c.req.param("id");
+  const order = await c.env.DB.prepare(
+    `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total, created_at, address_json
+     FROM orders WHERE id = ?`
+  )
+    .bind(orderId)
+    .first<OrderRow & { address_json: string | null }>();
+  if (!order) return c.json({ error: "not_found" }, 404);
+
+  const { results: items } = await c.env.DB.prepare(
+    `SELECT variant_id, title, qty, unit_amount FROM order_items WHERE order_id = ? ORDER BY rowid`
+  )
+    .bind(orderId)
+    .all<{ variant_id: string; title: string; qty: number; unit_amount: number }>();
+
+  const shipment = await c.env.DB.prepare(
+    `SELECT tracking_number, carrier FROM shipments WHERE order_id = ?`
+  )
+    .bind(orderId)
+    .first<{ tracking_number: string; carrier: string }>();
+
+  let address: Record<string, unknown> | null = null;
+  if (order.address_json) {
+    try {
+      const parsed: unknown = JSON.parse(order.address_json);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        address = parsed as Record<string, unknown>;
+      }
+    } catch {
+      address = null;
+    }
+  }
+
+  return c.json({
+    id: order.id,
+    email: order.email,
+    status: order.status,
+    currency: order.currency,
+    subtotal: order.subtotal,
+    shippingAmount: order.shipping_amount,
+    tax: order.tax,
+    total: order.total,
+    createdAt: order.created_at,
+    address,
+    shipment: shipment
+      ? { trackingNumber: shipment.tracking_number, carrier: shipment.carrier }
+      : null,
+    lines: (items ?? []).map((row) => ({
+      variantId: row.variant_id,
+      title: row.title,
+      qty: row.qty,
+      unitAmount: row.unit_amount,
+      lineTotal: row.qty * row.unit_amount,
+    })),
+  });
+});
+
 adminRoutes.post("/orders/:id/shipments", async (c) => {
   let body: unknown;
   try {

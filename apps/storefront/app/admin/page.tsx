@@ -197,6 +197,15 @@ function ProductsPanel({
   onChanged: () => void;
   onError: (msg: string | null) => void;
 }) {
+  const [showCreate, setShowCreate] = useState(false);
+  const [title, setTitle] = useState("");
+  const [slug, setSlug] = useState("");
+  const [description, setDescription] = useState("");
+  const [sku, setSku] = useState("");
+  const [price, setPrice] = useState("2500");
+  const [stock, setStock] = useState("10");
+  const [creating, setCreating] = useState(false);
+
   async function setAvailable(variantId: string, available: number) {
     onError(null);
     const res = await opsFetch(`inventory/${variantId}`, token, {
@@ -250,93 +259,226 @@ function ProductsPanel({
     onChanged();
   }
 
-  if (products.length === 0) {
-    return <p className="text-sm text-muted-foreground">No products yet.</p>;
+  async function createProduct(e: React.FormEvent) {
+    e.preventDefault();
+    setCreating(true);
+    onError(null);
+    try {
+      const priceCents = Number(price);
+      const available = Number(stock);
+      if (!Number.isInteger(priceCents) || priceCents < 0 || !Number.isInteger(available) || available < 0) {
+        onError("Price and stock must be non-negative integers.");
+        return;
+      }
+      const res = await opsFetch("products", token, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          slug: slug || title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
+          description,
+          status: "active",
+          variants: [
+            {
+              sku: sku || `SKU-${Date.now()}`,
+              options: {},
+              price: priceCents,
+              available,
+            },
+          ],
+        }),
+      });
+      if (!res.ok) {
+        onError("Create product failed.");
+        return;
+      }
+      setShowCreate(false);
+      setTitle("");
+      setSlug("");
+      setDescription("");
+      setSku("");
+      setPrice("2500");
+      setStock("10");
+      onChanged();
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
-    <ul className="space-y-6">
-      {products.map((product) => (
-        <li key={product.id} className="border-b border-border/70 pb-6">
-          <div className="flex flex-col gap-4 sm:flex-row">
-            <div className="size-24 shrink-0 overflow-hidden rounded-md bg-muted">
-              {product.imageUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={product.imageUrl} alt="" className="size-full object-cover" />
-              ) : (
-                <div className="flex size-full items-center justify-center text-[10px] text-muted-foreground">
-                  No image
-                </div>
-              )}
-            </div>
-            <div className="min-w-0 flex-1 space-y-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="font-medium">{product.title}</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {product.slug} · {product.status}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {(["draft", "active", "archived"] as const).map((status) => (
-                    <Button
-                      key={status}
-                      size="xs"
-                      variant={product.status === status ? "default" : "outline"}
-                      onClick={() => void setStatus(product.id, status)}
-                    >
-                      {status}
-                    </Button>
-                  ))}
-                </div>
-              </div>
+    <div className="space-y-8">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">{products.length} products</p>
+        <Button size="sm" onClick={() => setShowCreate((v) => !v)}>
+          {showCreate ? "Cancel" : "New product"}
+        </Button>
+      </div>
 
-              <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-                <span className="underline-offset-4 hover:underline">Upload image</span>
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) void uploadImage(product, file);
-                    e.target.value = "";
-                  }}
-                />
-              </label>
+      {showCreate ? (
+        <form onSubmit={createProduct} className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2">
+          <Input
+            className="sm:col-span-2"
+            placeholder="Title"
+            required
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <Input
+            placeholder="Slug (optional)"
+            value={slug}
+            onChange={(e) => setSlug(e.target.value)}
+          />
+          <Input placeholder="SKU" value={sku} onChange={(e) => setSku(e.target.value)} />
+          <Input
+            className="sm:col-span-2"
+            placeholder="Description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+          <Input
+            type="number"
+            min={0}
+            placeholder="Price (cents)"
+            required
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+          />
+          <Input
+            type="number"
+            min={0}
+            placeholder="Stock"
+            required
+            value={stock}
+            onChange={(e) => setStock(e.target.value)}
+          />
+          <Button type="submit" className="sm:col-span-2" disabled={creating}>
+            {creating ? "Creating…" : "Create product"}
+          </Button>
+        </form>
+      ) : null}
 
-              <ul className="space-y-2">
-                {product.variants.map((variant) => (
-                  <li
-                    key={variant.id}
-                    className="flex flex-wrap items-center gap-3 text-sm"
-                  >
-                    <span className="min-w-28 font-mono text-xs">{variant.sku}</span>
-                    <label className="flex items-center gap-2">
-                      Stock
+      {products.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No products yet.</p>
+      ) : (
+        <ul className="space-y-6">
+          {products.map((product) => (
+            <li key={product.id} className="border-b border-border/70 pb-6">
+              <div className="flex flex-col gap-4 sm:flex-row">
+                <div className="size-24 shrink-0 overflow-hidden rounded-md bg-muted">
+                  {product.imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={product.imageUrl} alt="" className="size-full object-cover" />
+                  ) : (
+                    <div className="flex size-full items-center justify-center text-[10px] text-muted-foreground">
+                      No image
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1 space-y-2">
                       <Input
-                        type="number"
-                        min={0}
-                        className="h-7 w-20"
-                        defaultValue={variant.available}
+                        defaultValue={product.title}
+                        key={`${product.id}-title`}
                         onBlur={(e) => {
-                          const next = Number(e.target.value);
-                          if (!Number.isInteger(next) || next < 0) return;
-                          if (next === variant.available) return;
-                          void setAvailable(variant.id, next);
+                          const next = e.target.value.trim();
+                          if (!next || next === product.title) return;
+                          void (async () => {
+                            onError(null);
+                            const res = await opsFetch(`products/${product.id}`, token, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ title: next }),
+                            });
+                            if (!res.ok) {
+                              onError("Product update failed.");
+                              return;
+                            }
+                            onChanged();
+                          })();
                         }}
                       />
-                    </label>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </li>
-      ))}
-    </ul>
+                      <p className="text-sm text-muted-foreground">
+                        {product.slug} · {product.status}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(["draft", "active", "archived"] as const).map((status) => (
+                        <Button
+                          key={status}
+                          size="xs"
+                          variant={product.status === status ? "default" : "outline"}
+                          onClick={() => void setStatus(product.id, status)}
+                        >
+                          {status}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-muted-foreground">
+                    <span className="underline-offset-4 hover:underline">Upload image</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) void uploadImage(product, file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+
+                  <ul className="space-y-2">
+                    {product.variants.map((variant) => (
+                      <li
+                        key={variant.id}
+                        className="flex flex-wrap items-center gap-3 text-sm"
+                      >
+                        <span className="min-w-28 font-mono text-xs">{variant.sku}</span>
+                        <label className="flex items-center gap-2">
+                          Stock
+                          <Input
+                            type="number"
+                            min={0}
+                            className="h-7 w-20"
+                            defaultValue={variant.available}
+                            onBlur={(e) => {
+                              const next = Number(e.target.value);
+                              if (!Number.isInteger(next) || next < 0) return;
+                              if (next === variant.available) return;
+                              void setAvailable(variant.id, next);
+                            }}
+                          />
+                        </label>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
+
+type OrderDetail = {
+  id: string;
+  email: string;
+  status: string;
+  currency: string;
+  subtotal: number;
+  shippingAmount: number;
+  tax: number;
+  total: number;
+  createdAt: string;
+  address?: Record<string, string> | null;
+  shipment?: { trackingNumber: string; carrier: string } | null;
+  lines: Array<{ title: string; qty: number; unitAmount: number; lineTotal: number }>;
+};
 
 function OrdersPanel({
   token,
@@ -350,6 +492,20 @@ function OrdersPanel({
   onError: (msg: string | null) => void;
 }) {
   const [tracking, setTracking] = useState<Record<string, string>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [detail, setDetail] = useState<OrderDetail | null>(null);
+
+  async function openDetail(orderId: string) {
+    onError(null);
+    setSelectedId(orderId);
+    const res = await opsFetch(`orders/${orderId}`, token);
+    if (!res.ok) {
+      onError("Could not load order detail.");
+      setDetail(null);
+      return;
+    }
+    setDetail((await res.json()) as OrderDetail);
+  }
 
   async function ship(orderId: string) {
     const trackingNumber = (tracking[orderId] ?? "").trim();
@@ -368,6 +524,7 @@ function OrdersPanel({
       return;
     }
     onChanged();
+    if (selectedId === orderId) void openDetail(orderId);
   }
 
   if (orders.length === 0) {
@@ -375,35 +532,86 @@ function OrdersPanel({
   }
 
   return (
-    <ul className="space-y-4">
-      {orders.map((order) => (
-        <li key={order.id} className="border-b border-border/70 pb-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="font-medium">{order.email}</p>
-              <p className="text-sm text-muted-foreground">
-                {order.id.slice(0, 8)} · {order.status} · {formatMoney(order.total, order.currency)}
-              </p>
-              <p className="text-xs text-muted-foreground">{order.createdAt}</p>
+    <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+      <ul className="space-y-4">
+        {orders.map((order) => (
+          <li key={order.id} className="border-b border-border/70 pb-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <button type="button" className="text-left" onClick={() => void openDetail(order.id)}>
+                <p className="font-medium">{order.email}</p>
+                <p className="text-sm text-muted-foreground">
+                  {order.id.slice(0, 8)} · {order.status} · {formatMoney(order.total, order.currency)}
+                </p>
+                <p className="text-xs text-muted-foreground">{order.createdAt}</p>
+              </button>
+              {order.status !== "shipped" && order.status !== "refunded" ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    className="h-8 w-44"
+                    placeholder="Tracking #"
+                    value={tracking[order.id] ?? ""}
+                    onChange={(e) =>
+                      setTracking((prev) => ({ ...prev, [order.id]: e.target.value }))
+                    }
+                  />
+                  <Button size="sm" onClick={() => void ship(order.id)}>
+                    Mark shipped
+                  </Button>
+                </div>
+              ) : null}
             </div>
-            {order.status !== "shipped" && order.status !== "refunded" ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  className="h-8 w-44"
-                  placeholder="Tracking #"
-                  value={tracking[order.id] ?? ""}
-                  onChange={(e) =>
-                    setTracking((prev) => ({ ...prev, [order.id]: e.target.value }))
-                  }
-                />
-                <Button size="sm" onClick={() => void ship(order.id)}>
-                  Mark shipped
-                </Button>
+          </li>
+        ))}
+      </ul>
+
+      <aside className="h-fit rounded-lg border p-4 text-sm">
+        {!detail ? (
+          <p className="text-muted-foreground">Select an order for line items and address.</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex justify-between gap-2">
+              <span className="font-mono text-xs">{detail.id}</span>
+              <span className="uppercase text-muted-foreground">{detail.status}</span>
+            </div>
+            <p>{detail.email}</p>
+            {detail.address ? (
+              <div className="text-muted-foreground">
+                <p className="font-medium text-foreground">Ship to</p>
+                <p>{detail.address.name}</p>
+                <p>
+                  {detail.address.line1}
+                  {detail.address.line2 ? `, ${detail.address.line2}` : ""}
+                </p>
+                <p>
+                  {[detail.address.city, detail.address.region, detail.address.postalCode]
+                    .filter(Boolean)
+                    .join(", ")}{" "}
+                  · {detail.address.country}
+                </p>
               </div>
             ) : null}
+            {detail.shipment ? (
+              <p>
+                Tracking: <span className="font-mono text-xs">{detail.shipment.trackingNumber}</span>
+              </p>
+            ) : null}
+            <ul className="space-y-1 border-t pt-3">
+              {detail.lines.map((line, idx) => (
+                <li key={`${line.title}-${idx}`} className="flex justify-between gap-2">
+                  <span>
+                    {line.title} × {line.qty}
+                  </span>
+                  <span className="tabular-nums">{formatMoney(line.lineTotal, detail.currency)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex justify-between font-medium border-t pt-3">
+              <span>Total</span>
+              <span className="tabular-nums">{formatMoney(detail.total, detail.currency)}</span>
+            </div>
           </div>
-        </li>
-      ))}
-    </ul>
+        )}
+      </aside>
+    </div>
   );
 }

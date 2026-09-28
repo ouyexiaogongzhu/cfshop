@@ -15,6 +15,16 @@ type OrderDetail = {
   shipping: number;
   tax: number;
   total: number;
+  address?: {
+    name?: string;
+    line1?: string;
+    line2?: string;
+    city?: string;
+    region?: string;
+    postalCode?: string;
+    country?: string;
+  } | null;
+  shipment?: { trackingNumber: string; carrier: string } | null;
   lines?: Array<{
     title: string;
     qty: number;
@@ -88,6 +98,31 @@ function OrderDetailInner() {
           <span className="font-mono text-xs">{order.orderId}</span>
           <span className="uppercase tracking-wide text-muted-foreground">{order.status}</span>
         </div>
+        {order.address ? (
+          <div className="mt-4 space-y-1 text-muted-foreground">
+            <p className="font-medium text-foreground">Ship to</p>
+            {order.address.name ? <p>{order.address.name}</p> : null}
+            <p>
+              {order.address.line1}
+              {order.address.line2 ? `, ${order.address.line2}` : ""}
+            </p>
+            <p>
+              {[order.address.city, order.address.region, order.address.postalCode]
+                .filter(Boolean)
+                .join(", ")}
+              {order.address.country ? ` · ${order.address.country}` : ""}
+            </p>
+          </div>
+        ) : null}
+        {order.shipment ? (
+          <div className="mt-4 space-y-1">
+            <p className="font-medium">Tracking</p>
+            <p className="font-mono text-xs">{order.shipment.trackingNumber}</p>
+            {order.shipment.carrier ? (
+              <p className="text-muted-foreground">{order.shipment.carrier}</p>
+            ) : null}
+          </div>
+        ) : null}
         <ul className="mt-4 space-y-2">
           {(order.lines ?? []).map((line, idx) => (
             <li key={`${line.title}-${idx}`} className="flex justify-between gap-3">

@@ -35,6 +35,8 @@ export function ProductPurchase({ product }: { product: Product }) {
     [variants, variantId],
   );
   const displayPrice = selected?.amount ?? product.price;
+  const available = selected?.available ?? 0;
+  const soldOut = available <= 0;
 
   if (variants.length === 0) {
     return (
@@ -46,13 +48,19 @@ export function ProductPurchase({ product }: { product: Product }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-xl tabular-nums">{formatPrice(displayPrice)}</p>
+      <div className="flex flex-wrap items-baseline gap-3">
+        <p className="text-xl tabular-nums">{formatPrice(displayPrice)}</p>
+        <Badge variant={soldOut ? "destructive" : "secondary"} className="w-fit">
+          {soldOut ? "Sold out" : `${available} in stock`}
+        </Badge>
+      </div>
       {variants.length > 1 ? (
         <div className="space-y-2">
           <p className="text-sm font-medium">Options</p>
           <div className="flex flex-wrap gap-2">
             {variants.map((variant) => {
               const active = variant.id === selected?.id;
+              const out = (variant.available ?? 0) <= 0;
               return (
                 <button
                   key={variant.id}
@@ -63,9 +71,11 @@ export function ProductPurchase({ product }: { product: Product }) {
                     active
                       ? "border-foreground bg-foreground text-background"
                       : "border-border hover:border-foreground/40",
+                    out && "opacity-50",
                   )}
                 >
                   {optionLabel(variant.options)}
+                  {out ? " · sold out" : ""}
                 </button>
               );
             })}
@@ -76,7 +86,11 @@ export function ProductPurchase({ product }: { product: Product }) {
           {optionLabel(variants[0]!.options)}
         </Badge>
       )}
-      <AddToCartButton variantId={selected?.id ?? ""} size="lg" />
+      {soldOut ? (
+        <p className="text-sm text-muted-foreground">This option is currently unavailable.</p>
+      ) : (
+        <AddToCartButton variantId={selected?.id ?? ""} size="lg" />
+      )}
     </div>
   );
 }

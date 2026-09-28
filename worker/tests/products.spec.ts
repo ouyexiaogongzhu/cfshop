@@ -122,6 +122,7 @@ describe("GET /api/store/products/:slug", () => {
           options: { size: "M" },
           currency: "usd",
           amount: 3000,
+          available: 0,
         },
       ],
     });

@@ -20,6 +20,8 @@ export type StoreOrderRecord = {
   quote: CheckoutQuote;
   email: string;
   created: boolean;
+  address?: Record<string, unknown> | null;
+  shipment?: { trackingNumber: string; carrier: string } | null;
 };
 
 export type CreateStoreOrderInput = {
@@ -42,6 +44,7 @@ type OrderRow = {
   tax: number;
   total: number;
   shipping_method_id: string | null;
+  address_json: string | null;
 };
 
 async function loadOrderQuote(env: Env, order: OrderRow): Promise<CheckoutQuote> {
@@ -71,19 +74,41 @@ async function loadOrderQuote(env: Env, order: OrderRow): Promise<CheckoutQuote>
 
 async function loadOrderById(env: Env, orderId: string): Promise<StoreOrderRecord | null> {
   const order = await env.DB.prepare(
-    `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total, shipping_method_id
+    `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total, shipping_method_id, address_json
      FROM orders WHERE id = ?`
   )
     .bind(orderId)
     .first<OrderRow>();
   if (!order) return null;
   const quote = await loadOrderQuote(env, order);
+  const shipment = await env.DB.prepare(
+    `SELECT tracking_number, carrier FROM shipments WHERE order_id = ?`
+  )
+    .bind(orderId)
+    .first<{ tracking_number: string; carrier: string }>();
+
+  let address: Record<string, unknown> | null = null;
+  if (order.address_json) {
+    try {
+      const parsed: unknown = JSON.parse(order.address_json);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        address = parsed as Record<string, unknown>;
+      }
+    } catch {
+      address = null;
+    }
+  }
+
   return {
     orderId: order.id,
     status: order.status,
     quote,
     email: order.email,
     created: false,
+    address,
+    shipment: shipment
+      ? { trackingNumber: shipment.tracking_number, carrier: shipment.carrier }
+      : null,
   };
 }
 
@@ -196,6 +221,10 @@ export async function createStoreOrder(input: CreateStoreOrderInput): Promise<St
     quote: { ...quote, country },
     email: normalizedEmail,
     created: true,
+    address: addressJson
+      ? (JSON.parse(addressJson) as Record<string, unknown>)
+      : { country },
+    shipment: null,
   };
 }
 
@@ -212,6 +241,8 @@ export function orderResponseBody(record: StoreOrderRecord): Record<string, unkn
     total: quote.total,
     shippingMethodId: quote.shippingMethodId,
     country: quote.country,
+    address: record.address ?? null,
+    shipment: record.shipment ?? null,
     lines: quote.lines.map((line) => ({
       variantId: line.variantId,
       qty: line.qty,

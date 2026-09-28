@@ -1,10 +1,9 @@
 import Link from "next/link";
 
 const links = [
-  { href: "#", label: "Shipping" },
-  { href: "#", label: "Returns" },
-  { href: "#", label: "Privacy" },
-  { href: "#", label: "Terms" },
+  { href: "/track", label: "Track order" },
+  { href: "/about", label: "About" },
+  { href: "/shop", label: "Shop" },
 ];
 
 export function SiteFooter() {

@@ -8,6 +8,7 @@ export interface ProductVariant {
   currency: string;
   /** Integer USD cents */
   amount: number;
+  available?: number;
 }
 
 /**
@@ -96,9 +97,12 @@ export function categoriesFrom(products: Product[]): string[] {
  * Active products from GET /api/store/products.
  * Soft-fails to [] when the API is unreachable (e.g. during `next build`).
  */
-export async function listProducts(): Promise<Product[]> {
+export async function listProducts(opts?: { category?: string }): Promise<Product[]> {
   try {
-    const res = await storeFetch("/api/store/products");
+    const params = new URLSearchParams();
+    if (opts?.category) params.set("category", opts.category);
+    const qs = params.toString();
+    const res = await storeFetch(`/api/store/products${qs ? `?${qs}` : ""}`);
     if (!res.ok) return [];
     const data: unknown = await res.json();
     if (!Array.isArray(data)) return [];

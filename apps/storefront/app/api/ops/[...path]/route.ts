@@ -6,7 +6,7 @@ type Params = { params: Promise<{ path: string[] }> };
 const ALLOWED = [
   /^products(?:\/[A-Za-z0-9_-]+)?$/,
   /^inventory\/[A-Za-z0-9_-]+$/,
-  /^orders(?:\/[A-Za-z0-9_-]+\/shipments)?$/,
+  /^orders(?:\/[A-Za-z0-9_-]+(?:\/shipments)?)?$/,
   /^media$/,
 ];
 

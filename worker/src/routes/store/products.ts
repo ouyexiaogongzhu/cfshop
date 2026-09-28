@@ -22,7 +22,8 @@ function withImageUrl<T extends { imageKey: string | null }>(row: T) {
 productRoutes.get("/products", async (c) => {
   const limit = Math.min(Number(c.req.query("limit") ?? 20) || 20, 100);
   const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
-  const results = await listActiveProducts(c.env.DB, limit, offset);
+  const category = c.req.query("category")?.trim() || null;
+  const results = await listActiveProducts(c.env.DB, limit, offset, category);
   return c.json(results.map(withImageUrl));
 });
 
@@ -37,6 +38,7 @@ productRoutes.get("/products/:slug", async (c) => {
     options: parseOptions(v.options),
     currency: v.currency,
     amount: v.amount,
+    available: Number(v.available) || 0,
   }));
   return c.json({ ...withImageUrl(product), variants });
 });
