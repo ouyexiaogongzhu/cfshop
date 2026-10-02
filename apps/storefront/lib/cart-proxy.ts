@@ -25,6 +25,11 @@ export async function proxyStoreRequest(
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
 
+  // Forwarded explicitly: the Worker's order-replay guard reads this header, and dropping it
+  // would leave every browser-placed order without idempotency protection.
+  const idempotencyKey = request.headers.get("idempotency-key");
+  if (idempotencyKey) headers.set("Idempotency-Key", idempotencyKey);
+
   const method = request.method.toUpperCase();
   const hasBody = method !== "GET" && method !== "HEAD";
 

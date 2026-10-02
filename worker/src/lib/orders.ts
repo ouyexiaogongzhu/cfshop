@@ -15,6 +15,15 @@ export class InsufficientInventoryError extends Error {
   }
 }
 
+/** The supplied Idempotency-Key is already bound to a different order. */
+export class IdempotencyConflictError extends Error {
+  status = 409;
+  constructor(message = "idempotency_conflict") {
+    super(message);
+    this.name = "IdempotencyConflictError";
+  }
+}
+
 export type StoreOrderRecord = {
   orderId: string;
   status: string;
@@ -28,6 +37,8 @@ export type StoreOrderRecord = {
 export type CreateStoreOrderInput = {
   env: Env;
   email: string;
+  /** Session principal, when the placer has one. Binds the order to an account. */
+  userId?: string | null;
   shippingMethodId: string;
   country: string | null;
   lines: QuoteLine[];
@@ -119,15 +130,34 @@ async function loadOrderById(env: Env, orderId: string): Promise<StoreOrderRecor
   };
 }
 
+export type IdempotencyLookup =
+  | { kind: "none" }
+  | { kind: "own"; record: StoreOrderRecord }
+  | { kind: "conflict" };
+
+/**
+ * Replay lookup for a supplied idempotency key.
+ *
+ * The key space is global, so the result is bound to the requester: a key only resolves
+ * for the same normalized email that created the order. Without that check, anyone holding
+ * a key could read another caller's order record. A key held by a different email reports
+ * `conflict` rather than `none`, so the caller rejects instead of falling through to an
+ * insert that would collide on the PRIMARY KEY.
+ */
 export async function getStoreOrderByIdempotencyKey(
   env: Env,
-  idempotencyKey: string
-): Promise<StoreOrderRecord | null> {
+  idempotencyKey: string,
+  email: string
+): Promise<IdempotencyLookup> {
   const link = await env.DB.prepare(`SELECT order_id FROM order_idempotency WHERE idempotency_key = ?`)
     .bind(idempotencyKey)
     .first<{ order_id: string }>();
-  if (!link) return null;
-  return loadOrderById(env, link.order_id);
+  if (!link) return { kind: "none" };
+  const record = await loadOrderById(env, link.order_id);
+  if (!record || record.email.toLowerCase() !== email.trim().toLowerCase()) {
+    return { kind: "conflict" };
+  }
+  return { kind: "own", record };
 }
 
 export async function getStoreOrderByIdAndEmail(
@@ -141,13 +171,15 @@ export async function getStoreOrderByIdAndEmail(
 }
 
 export async function createStoreOrder(input: CreateStoreOrderInput): Promise<StoreOrderRecord> {
-  const { env, email, shippingMethodId, country, lines, idempotencyKey, addressJson, discountCode } =
+  const { env, email, userId, shippingMethodId, country, lines, idempotencyKey, addressJson, discountCode } =
     input;
   const normalizedEmail = email.trim().toLowerCase();
 
   if (idempotencyKey) {
-    const existing = await getStoreOrderByIdempotencyKey(env, idempotencyKey);
-    if (existing) return existing;
+    const existing = await getStoreOrderByIdempotencyKey(env, idempotencyKey, normalizedEmail);
+    if (existing.kind === "own") return existing.record;
+    // Key belongs to another caller: reusing it would collide on the idempotency PRIMARY KEY.
+    if (existing.kind === "conflict") throw new IdempotencyConflictError();
   }
 
   let quoteResult: Awaited<ReturnType<typeof buildCheckoutQuote>>;
@@ -192,12 +224,13 @@ export async function createStoreOrder(input: CreateStoreOrderInput): Promise<St
     const statements: D1PreparedStatement[] = [
       env.DB.prepare(
         `INSERT INTO orders (
-           id, email, status, currency, subtotal, shipping_amount, shipping_method_id,
+           id, email, user_id, status, currency, subtotal, shipping_amount, shipping_method_id,
            tax, total, address_json, discount_code, discount_amount
-         ) VALUES (?, ?, 'pending', 'usd', ?, ?, ?, ?, ?, ?, ?, ?)`
+         ) VALUES (?, ?, ?, 'pending', 'usd', ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         orderId,
         normalizedEmail,
+        userId ?? null,
         quote.subtotal,
         quote.shipping,
         quote.shippingMethodId,

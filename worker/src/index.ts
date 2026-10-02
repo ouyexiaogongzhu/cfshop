@@ -40,10 +40,9 @@ app.onError((err, c) => {
       JSON.stringify({ level: "error", msg: "unhandled", path: c.req.path, error: String(err) })
     );
   }
-  return c.json(
-    { error: err instanceof Error ? err.message : "internal_error" },
-    status as ContentfulStatusCode
-  );
+  // Never echo an exception message to the caller: it can carry runtime internals or D1 text.
+  // Handlers that want a specific code return it via jsonError instead of throwing.
+  return c.json({ error: "internal_error" }, status as ContentfulStatusCode);
 });
 
 app.get("/api/health", async (c) => {

@@ -1,13 +1,11 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { getCookie } from "hono/cookie";
 import { buildCheckoutQuote, normalizeCountry, parseQuoteLines, type QuoteLine } from "../../lib/checkout-quote";
 import { DiscountError } from "../../lib/discounts";
 import { orderResponseBody, type StoreOrderRecord } from "../../lib/orders";
 import { PaymentUnavailableError, resolvePaymentProvider } from "../../lib/payments";
+import { readCartId } from "./cart";
 import { placePendingOrder } from "./orders";
-
-const CART_COOKIE = "cfshop_cart";
 
 type StoreContext = Context<{ Bindings: Env }>;
 
@@ -43,7 +41,7 @@ async function resolveLines(
     if (parsed.length === 0) return "empty_cart";
     return parsed;
   }
-  const cartId = getCookie(c, CART_COOKIE);
+  const cartId = readCartId(c);
   if (!cartId) return "empty_cart";
   const state = await c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)).getState();
   const lines = state.items.map((item) => ({ variantId: item.variantId, qty: item.qty }));

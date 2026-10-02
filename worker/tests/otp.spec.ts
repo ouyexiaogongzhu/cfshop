@@ -80,6 +80,24 @@ describe("OTP auth", () => {
     expect(row?.password_hash.startsWith("!otp:")).toBe(true);
   });
 
+  it("does not claim the email on request, so an unverified caller cannot squat it", async () => {
+    const email = `otp-squat-${crypto.randomUUID()}@example.com`;
+    captureDevOtp(email);
+
+    const requested = await post("/auth/otp/request", { email });
+    expect(requested.status).toBe(200);
+
+    // The identity must not be consumed until the code proves mailbox control.
+    const row = await env.DB.prepare("SELECT id FROM users WHERE email = ?")
+      .bind(email)
+      .first<{ id: string }>();
+    expect(row).toBeNull();
+
+    // The legitimate owner can therefore still register.
+    const registered = await post("/auth/register", { email, password: "correct horse" });
+    expect(registered.status).toBe(201);
+  });
+
   it("always returns ok on request without leaking existence", async () => {
     const email = `otp-leak-${crypto.randomUUID()}@example.com`;
     const captured = captureDevOtp(email);

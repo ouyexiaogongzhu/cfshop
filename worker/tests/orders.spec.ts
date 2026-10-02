@@ -33,8 +33,8 @@ async function insertProductWithStock(available: number): Promise<void> {
     .run();
 }
 
-async function stripeSignature(payload: string, secret: string): Promise<string> {
-  const timestamp = Math.floor(Date.now() / 1000);
+async function stripeSignature(payload: string, secret: string, ageSeconds = 0): Promise<string> {
+  const timestamp = Math.floor(Date.now() / 1000) - ageSeconds;
   const signedPayload = `${timestamp}.${payload}`;
   const key = await crypto.subtle.importKey(
     "raw",
@@ -49,7 +49,9 @@ async function stripeSignature(payload: string, secret: string): Promise<string>
 }
 
 beforeAll(async () => {
-  await insertProductWithStock(10);
+  // Headroom: the file places more units than one order's worth, and a refund does not
+  // return stock to the Durable Object ledger (release is a no-op once confirmed).
+  await insertProductWithStock(50);
 });
 
 describe("POST /api/store/orders", () => {
@@ -94,6 +96,43 @@ describe("POST /api/store/orders", () => {
       .bind(body.orderId)
       .first<{ status: string; email: string }>();
     expect(row).toEqual({ status: "pending", email });
+  });
+
+  it("does not resolve another caller's order for a stolen Idempotency-Key", async () => {
+    const owner = `idem-owner-${crypto.randomUUID()}@example.com`;
+    const key = `idem-steal-${crypto.randomUUID()}`;
+    const first = await SELF.fetch("https://example.com/api/store/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify({
+        email: owner,
+        shippingMethodId: "ship_hk",
+        country: "HK",
+        items: [{ variantId: VARIANT, qty: 1 }],
+      }),
+    });
+    expect(first.status).toBe(201);
+    const { orderId: ownerOrderId } = await first.json<{ orderId: string }>();
+
+    // Same key, different requester: must be rejected outright, never resolve the owner's order.
+    const stolen = await SELF.fetch("https://example.com/api/store/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json", "Idempotency-Key": key },
+      body: JSON.stringify({
+        email: `attacker-${crypto.randomUUID()}@example.com`,
+        shippingMethodId: "ship_hk",
+        country: "HK",
+        items: [{ variantId: VARIANT, qty: 1 }],
+      }),
+    });
+    expect(stolen.status).toBe(409);
+    expect(await stolen.json()).toEqual({ error: "idempotency_conflict" });
+
+    // The owner's order is untouched and still resolvable only by its own email.
+    const stillThere = await env.DB.prepare(`SELECT id, email FROM orders WHERE id = ?`)
+      .bind(ownerOrderId)
+      .first<{ id: string; email: string }>();
+    expect(stillThere?.email).toBe(owner);
   });
 
   it("returns the same order when Idempotency-Key is replayed", async () => {
@@ -199,12 +238,32 @@ describe("GET /api/store/orders/:id", () => {
 });
 
 describe("POST /webhooks/stripe", () => {
-  it("rejects an invalid signature", async () => {
+  it("rejects a valid but stale signature outside the tolerance window", async () => {
+    // Correctly signed, but signed an hour ago: the MAC matches, freshness must not.
+    const payload = JSON.stringify({
+      id: `evt_stale_${crypto.randomUUID()}`,
+      type: "checkout.session.completed",
+      data: { object: { metadata: { order_id: "nonexistent" } } },
+    });
     const res = await SELF.fetch("https://example.com/webhooks/stripe", {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "stripe-signature": "t=1,v1=deadbeef",
+        "stripe-signature": await stripeSignature(payload, WEBHOOK_SECRET, 3600),
+      },
+      body: payload,
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "timestamp_out_of_tolerance" });
+  });
+
+  it("rejects an invalid signature", async () => {
+    // Current timestamp with a bogus MAC: this must fail on the HMAC, not on freshness.
+    const res = await SELF.fetch("https://example.com/webhooks/stripe", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "stripe-signature": `t=${Math.floor(Date.now() / 1000)},v1=deadbeef`,
       },
       body: JSON.stringify({ id: "evt_test", type: "checkout.session.completed" }),
     });
@@ -343,6 +402,7 @@ describe("POST /webhooks/stripe", () => {
   });
 
   it("refunds the order and restocks on charge.refunded", async () => {
+    const QTY = 1;
     const email = `refund-${crypto.randomUUID()}@example.com`;
     const created = await SELF.fetch("https://example.com/api/store/orders", {
       method: "POST",
@@ -351,7 +411,7 @@ describe("POST /webhooks/stripe", () => {
         email,
         shippingMethodId: "ship_hk",
         country: "HK",
-        items: [{ variantId: VARIANT, qty: 1 }],
+        items: [{ variantId: VARIANT, qty: QTY }],
       }),
     });
     const { orderId } = (await created.json()) as { orderId: string };
@@ -369,6 +429,15 @@ describe("POST /webhooks/stripe", () => {
       },
       body: paidPayload,
     });
+
+    // Capture the sold count after settlement so the refund can be asserted as its inverse.
+    const afterPaid = await env.DB.prepare(
+      `SELECT available, sold FROM inventory WHERE variant_id = ?`
+    )
+      .bind(VARIANT)
+      .first<{ available: number; sold: number }>();
+    const soldAfterPaid = Number(afterPaid?.sold);
+    const availableAfterPaid = Number(afterPaid?.available);
 
     const refundPayload = JSON.stringify({
       id: `evt_refund_${orderId}`,
@@ -390,13 +459,15 @@ describe("POST /webhooks/stripe", () => {
       .first<{ status: string }>();
     expect(order?.status).toBe("refunded");
 
-    // D1 mirror: the sale was returned to available stock.
+    // Refund must exactly reverse settlement: sold down, available back up. Previously the
+    // refund only moved available, leaving the unit counted as both sold and sellable.
     const inv = await env.DB.prepare(
       `SELECT available, sold FROM inventory WHERE variant_id = ?`
     )
       .bind(VARIANT)
       .first<{ available: number; sold: number }>();
-    expect(Number(inv?.sold)).toBeGreaterThanOrEqual(0);
+    expect(Number(inv?.sold)).toBe(soldAfterPaid - QTY);
+    expect(Number(inv?.available)).toBe(availableAfterPaid + QTY);
 
     const ack = await res.json<{ received: boolean; type: string }>();
     expect(ack).toMatchObject({ received: true, type: "charge.refunded" });
@@ -428,5 +499,81 @@ describe("POST /api/store/checkout/complete", () => {
     expect(body.payment.provider).toBe("mock");
     expect(body.payment.url).toContain("mock-pay.example");
     expect(body.orderId).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
+
+describe("GET /api/store/orders owner scoping", () => {
+  async function login(email: string): Promise<string> {
+    const registered = await SELF.fetch("https://example.com/api/store/auth/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password: "password123" }),
+    });
+    expect(registered.status).toBe(201);
+    const loginRes = await SELF.fetch("https://example.com/api/store/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, password: "password123" }),
+    });
+    expect(loginRes.status).toBe(200);
+    const list = loginRes.headers.getSetCookie?.() ?? [];
+    const pair = (
+      list.length > 0
+        ? list
+        : (loginRes.headers.get("set-cookie") ?? "").split(/,\s*(?=[^;]+?=)/)
+    )
+      .map((v) => v.split(";")[0]?.trim() ?? "")
+      .find((v) => v.startsWith("cfshop_session="));
+    if (!pair) throw new Error("missing session cookie");
+    return pair;
+  }
+
+  it("does not show an anonymously planted order to the named account", async () => {
+    const victim = `victim-${crypto.randomUUID()}@example.com`;
+    const cookie = await login(victim);
+
+    // Anonymous POST under the victim's address: no session, caller-asserted email.
+    const planted = await SELF.fetch("https://example.com/api/store/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: victim,
+        shippingMethodId: "ship_hk",
+        country: "HK",
+        items: [{ variantId: VARIANT, qty: 1 }],
+      }),
+    });
+    expect(planted.status).toBe(201);
+    const { orderId: plantedId } = await planted.json<{ orderId: string }>();
+
+    const list = await SELF.fetch("https://example.com/api/store/orders", {
+      headers: { cookie },
+    });
+    expect(list.status).toBe(200);
+    const rows = await list.json<{ orderId: string; email: string }[]>();
+    // The planted row exists, but it is not owned by the victim account.
+    expect(rows.find((r) => r.orderId === plantedId)).toBeUndefined();
+  });
+
+  it("shows the account its own session-placed orders", async () => {
+    const buyer = `self-${crypto.randomUUID()}@example.com`;
+    const cookie = await login(buyer);
+
+    const placed = await SELF.fetch("https://example.com/api/store/orders", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie },
+      body: JSON.stringify({
+        email: buyer,
+        shippingMethodId: "ship_hk",
+        country: "HK",
+        items: [{ variantId: VARIANT, qty: 1 }],
+      }),
+    });
+    expect(placed.status).toBe(201);
+    const { orderId } = await placed.json<{ orderId: string }>();
+
+    const list = await SELF.fetch("https://example.com/api/store/orders", { headers: { cookie } });
+    const rows = await list.json<{ orderId: string }[]>();
+    expect(rows.map((r) => r.orderId)).toContain(orderId);
   });
 });

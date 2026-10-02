@@ -125,28 +125,9 @@ authRoutes.post("/auth/otp/request", async (c) => {
   const allowed = await checkAndIncrementOtpSendRate(c.env.CACHE, email);
   if (!allowed) return c.json({ ok: true });
 
-  let user = await c.env.DB.prepare("SELECT id FROM users WHERE email = ?")
-    .bind(email)
-    .first<{ id: string }>();
-
-  if (!user) {
-    const id = crypto.randomUUID();
-    const inserted = await c.env.DB.prepare(
-      "INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?, ?, ?)"
-    )
-      .bind(id, email, unusablePasswordHash())
-      .run();
-    if (inserted.meta.changes === 0) {
-      user = await c.env.DB.prepare("SELECT id FROM users WHERE email = ?")
-        .bind(email)
-        .first<{ id: string }>();
-    } else {
-      user = { id };
-    }
-  }
-
-  if (!user) return c.json({ ok: true });
-
+  // Deliberately does not touch `users`: claiming a UNIQUE email here would let an
+  // unverified request permanently consume an identity the real owner can never register.
+  // The row is created at /auth/otp/verify, once the code proves control of the mailbox.
   const code = generateOtpCode();
   await storeOtp(c.env.CACHE, email, code);
 
@@ -173,12 +154,33 @@ authRoutes.post("/auth/otp/verify", async (c) => {
     return c.json({ error: "invalid_otp" }, 401);
   }
 
-  const user = await c.env.DB.prepare("SELECT id, email FROM users WHERE email = ?")
+  // The code proved control of the mailbox, so claiming the address here is verified.
+  // INSERT OR IGNORE keeps a concurrent register from turning into a 500.
+  let user = await c.env.DB.prepare("SELECT id, email FROM users WHERE email = ?")
     .bind(email)
     .first<UserPublic>();
-  if (!user) return c.json({ error: "invalid_otp" }, 401);
+  if (!user) {
+    const id = crypto.randomUUID();
+    const inserted = await c.env.DB.prepare(
+      "INSERT OR IGNORE INTO users (id, email, password_hash) VALUES (?, ?, ?)"
+    )
+      .bind(id, email, unusablePasswordHash())
+      .run();
+    user =
+      inserted.meta.changes > 0
+        ? { id, email }
+        : await c.env.DB.prepare("SELECT id, email FROM users WHERE email = ?")
+            .bind(email)
+            .first<UserPublic>();
+  }
+  // The code was already consumed, so re-reading is the only way this can be a real failure.
+  // Reporting invalid_otp here would tell a caller their valid code was wrong.
+  if (!user) {
+    console.error(JSON.stringify({ level: "error", msg: "otp_user_missing", email }));
+    return c.json({ error: "internal_error" }, 500);
+  }
 
   const sessionId = await createSession(c.env.CACHE, user.id);
   setSessionCookie(c, sessionId);
-  return c.json({ id: user.id, email: user.email } satisfies UserPublic);
+  return c.json(user);
 });

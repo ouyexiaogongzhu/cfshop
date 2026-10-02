@@ -8,9 +8,15 @@ type StoreContext = Context<{ Bindings: Env }>;
 
 export const cartRoutes = new Hono<{ Bindings: Env }>();
 
-function readCartId(c: StoreContext): string | null {
+/**
+ * The cart id is a Durable Object *name*, so it must be a server-issued id. Accepting any
+ * caller string would let a request address an arbitrary object; the UUID is the capability.
+ */
+const CART_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function readCartId(c: StoreContext): string | null {
   const cartId = getCookie(c, CART_COOKIE);
-  return cartId ? cartId : null;
+  return cartId && CART_ID_RE.test(cartId) ? cartId : null;
 }
 
 function setCartCookie(c: StoreContext, cartId: string): void {

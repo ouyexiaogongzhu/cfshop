@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { jsonError } from "../../lib/errors";
+import { jsonError, safeDecode } from "../../lib/errors";
 
 /** Public product media from R2. Mounted at /api/store. */
 export const mediaRoutes = new Hono<{ Bindings: Env }>();
@@ -16,7 +16,7 @@ const EXT_TYPE: Record<string, string> = {
 
 /** Serve object key under /api/store/media/<key> (key may contain slashes). */
 mediaRoutes.get("/media/:key{.+}", async (c) => {
-  const key = decodeURIComponent(c.req.param("key") ?? "");
+  const key = safeDecode(c.req.param("key") ?? "");
   if (!key || key.includes("..") || !KEY_RE.test(key)) {
     return jsonError(c, 400, "invalid_key");
   }

@@ -1,19 +1,18 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { getCookie } from "hono/cookie";
 import { normalizeCountry, parseQuoteLines, type QuoteLine } from "../../lib/checkout-quote";
 import { DiscountError } from "../../lib/discounts";
 import {
   createStoreOrder,
   getStoreOrderByIdAndEmail,
   getStoreOrderByIdempotencyKey,
+  IdempotencyConflictError,
   InsufficientInventoryError,
   orderResponseBody,
   type StoreOrderRecord,
 } from "../../lib/orders";
 import { readSessionUserId, sessionCookie } from "../../lib/session";
-
-const CART_COOKIE = "cfshop_cart";
+import { readCartId } from "./cart";
 
 type StoreContext = Context<{ Bindings: Env }>;
 
@@ -95,7 +94,7 @@ async function resolveLines(
     if (parsed.length === 0) return "empty_cart";
     return parsed;
   }
-  const cartId = getCookie(c, CART_COOKIE);
+  const cartId = readCartId(c);
   if (!cartId) return "empty_cart";
   const state = await c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)).getState();
   const lines = state.items.map((item) => ({ variantId: item.variantId, qty: item.qty }));
@@ -104,12 +103,12 @@ async function resolveLines(
 }
 
 export function readIdempotencyKey(c: StoreContext, body: Record<string, unknown>): string | undefined {
-  const header = c.req.header("Idempotency-Key")?.trim();
-  if (header && header.length > 0) return header;
-  if (typeof body.idempotencyKey === "string" && body.idempotencyKey.trim().length > 0) {
-    return body.idempotencyKey.trim();
-  }
-  return undefined;
+  // Bounded: the key becomes a PRIMARY KEY, so an unbounded caller string must not reach it.
+  const bound = (value: unknown): string | undefined => {
+    const trimmed = typeof value === "string" ? value.trim() : "";
+    return trimmed.length > 0 && trimmed.length <= 255 ? trimmed : undefined;
+  };
+  return bound(c.req.header("Idempotency-Key")) ?? bound(body.idempotencyKey);
 }
 
 function isOrderRecord(value: StoreOrderRecord | Response): value is StoreOrderRecord {
@@ -124,8 +123,9 @@ export async function placePendingOrder(
 ): Promise<StoreOrderRecord | Response> {
   const key = readIdempotencyKey(c, body);
   if (key) {
-    const existing = await getStoreOrderByIdempotencyKey(c.env, key);
-    if (existing) return existing;
+    const existing = await getStoreOrderByIdempotencyKey(c.env, key, email);
+    if (existing.kind === "own") return existing.record;
+    if (existing.kind === "conflict") return c.json({ error: "idempotency_conflict" }, 409);
   }
 
   const lines = await resolveLines(c, body);
@@ -136,7 +136,7 @@ export async function placePendingOrder(
   if (addressJson === "invalid") return c.json({ error: "invalid_request" }, 400);
 
   const usesCart = body.items === undefined;
-  const cartId = usesCart ? getCookie(c, CART_COOKIE) : null;
+  const cartId = usesCart ? readCartId(c) : null;
   const cartStub = cartId ? c.env.CART_DO.get(c.env.CART_DO.idFromName(cartId)) : null;
 
   const discountCode =
@@ -149,6 +149,9 @@ export async function placePendingOrder(
     const record = await createStoreOrder({
       env: c.env,
       email,
+      // Bind to the session when the placer has one. A guest POST leaves this NULL, so an
+      // anonymous caller can no longer write a row into a registered account's order list.
+      userId: await readSessionUserId(c.env.CACHE, sessionCookie(c)),
       shippingMethodId: String(body.shippingMethodId),
       country,
       lines,
@@ -166,6 +169,7 @@ export async function placePendingOrder(
   } catch (err) {
     if (cartStub) await cartStub.unlock();
     if (err instanceof InsufficientInventoryError) return c.json({ error: "insufficient_inventory" }, 409);
+    if (err instanceof IdempotencyConflictError) return c.json({ error: "idempotency_conflict" }, 409);
     if (err instanceof DiscountError) return c.json({ error: err.message }, 400);
     if (err instanceof Error && (err.message === "not_found" || err.message === "invalid_request")) {
       return c.json({ error: err.message }, err.message === "not_found" ? 404 : 400);
@@ -178,20 +182,23 @@ orderRoutes.get("/orders", async (c) => {
   const userId = await readSessionUserId(c.env.CACHE, sessionCookie(c));
   if (!userId) return c.json({ error: "unauthorized" }, 401);
 
-  const user = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`)
+  // Owner-scoped: the session principal, not the caller-asserted email. Guest rows placed
+  // before an account existed carry user_id = NULL and are not claimable by email here;
+  // they stay reachable through the orderId + email lookup on GET /orders/:id.
+  const user = await c.env.DB.prepare(`SELECT id FROM users WHERE id = ?`)
     .bind(userId)
-    .first<{ email: string }>();
+    .first<{ id: string }>();
   if (!user) return c.json({ error: "unauthorized" }, 401);
 
   const limit = Math.min(Math.max(Number(c.req.query("limit") ?? 20) || 20, 1), 50);
   const { results } = await c.env.DB.prepare(
     `SELECT id, email, status, currency, subtotal, shipping_amount, tax, total, created_at
      FROM orders
-     WHERE lower(email) = lower(?)
+     WHERE user_id = ?
      ORDER BY created_at DESC
      LIMIT ?`
   )
-    .bind(user.email, limit)
+    .bind(userId, limit)
     .all<{
       id: string;
       email: string;

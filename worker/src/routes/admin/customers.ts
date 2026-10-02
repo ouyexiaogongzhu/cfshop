@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { safeDecode } from "../../lib/errors";
 
 type CustomerAgg = {
   email: string;
@@ -75,7 +76,9 @@ customerRoutes.get("/customers", async (c) => {
 });
 
 customerRoutes.get("/customers/:email/orders", async (c) => {
-  const email = decodeURIComponent(c.req.param("email")).trim().toLowerCase();
+  const decoded = safeDecode(c.req.param("email"));
+  if (decoded === null) return c.json({ error: "bad_request" }, 400);
+  const email = decoded.trim().toLowerCase();
   if (!email) return c.json({ error: "bad_request" }, 400);
 
   const limit = pageLimit(c.req.query("limit"));

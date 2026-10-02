@@ -81,13 +81,17 @@ async function markOrderPaid(env: Env, orderId: string): Promise<void> {
     .bind(orderId)
     .first<{ id: string; status: string }>();
   if (!order) return; // Unknown order: keep the event recorded, ACK.
-  if (order.status === "paid") return; // Already finalized; nothing to do.
 
-  const lines = await orderLinesForOrder(env, orderId);
-
-  await env.DB.prepare(`UPDATE orders SET status = 'paid' WHERE id = ? AND status = 'pending'`)
+  // The transition is the gate: side effects run only when this UPDATE actually matched a
+  // pending order. Without the change check, a refunded/shipped order would still settle.
+  const paid = await env.DB.prepare(
+    `UPDATE orders SET status = 'paid' WHERE id = ? AND status = 'pending'`
+  )
     .bind(orderId)
     .run();
+  if ((paid.meta.changes ?? 0) === 0) return;
+
+  const lines = await orderLinesForOrder(env, orderId);
 
   // DO-then-D1 (compensating pattern used by checkout): confirm DO
   // reservations first, then best-effort mirror into the D1 ledger.
@@ -109,23 +113,42 @@ async function markOrderRefunded(env: Env, orderId: string): Promise<void> {
   const order = await env.DB.prepare(`SELECT id, status FROM orders WHERE id = ?`)
     .bind(orderId)
     .first<{ id: string; status: string }>();
-  if (!order || order.status === "refunded") return;
+  if (!order) return;
 
+  // Refund is legal from pending or paid only, and — like the paid path — the matched-row
+  // count is the gate for the restock loop below.
+  const refunded = await env.DB.prepare(
+    `UPDATE orders SET status = 'refunded' WHERE id = ? AND status IN ('pending', 'paid')`
+  )
+    .bind(orderId)
+    .run();
+  if ((refunded.meta.changes ?? 0) === 0) return;
+
+  // `sold` is only ever incremented by markOrderPaid, so only a previously-paid order may
+  // decrement it. Refunding a still-pending order must not eat another order's sold count.
+  const wasPaid = order.status === "paid";
   const lines = await orderLinesForOrder(env, orderId);
-
-  await env.DB.prepare(`UPDATE orders SET status = 'refunded' WHERE id = ?`).bind(orderId).run();
 
   for (const line of lines) {
     const reservationId = reservationIdForOrderLine(orderId, line.variant_id);
     // On a paid order the reservation is already `confirmed`; this is a
     // no-op. On a pending order it releases stock back to available.
     await env.INVENTORY_DO.get(env.INVENTORY_DO.idFromName(line.variant_id)).release(reservationId);
-    await env.DB.prepare(
-      `UPDATE inventory
-       SET reserved = MAX(reserved - ?, 0), available = available + ?, updated_at = datetime('now')
-       WHERE variant_id = ?`
-    )
-      .bind(line.qty, line.qty, line.variant_id)
+    // Reverse exactly the counter markOrderPaid moved, so refund is its inverse.
+    const sql = wasPaid
+      ? `UPDATE inventory
+         SET reserved = MAX(reserved - ?, 0), available = available + ?,
+             sold = MAX(sold - ?, 0), updated_at = datetime('now')
+         WHERE variant_id = ?`
+      : `UPDATE inventory
+         SET reserved = MAX(reserved - ?, 0), available = available + ?,
+             updated_at = datetime('now')
+         WHERE variant_id = ?`;
+    const args = wasPaid
+      ? [line.qty, line.qty, line.qty, line.variant_id]
+      : [line.qty, line.qty, line.variant_id];
+    await env.DB.prepare(sql)
+      .bind(...args)
       .run();
   }
 }

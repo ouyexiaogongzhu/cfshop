@@ -7,6 +7,9 @@ declare global {
   }
 }
 
+/** Signature freshness window; matches the Stripe SDK default of 300s. */
+const WEBHOOK_TOLERANCE_SECONDS = 300;
+
 export type PaymentSessionRequest = {
   orderId: string;
   amount: number;
@@ -95,16 +98,25 @@ class StripePaymentProvider implements PaymentProvider {
     if (!this.webhookSecret) throw new PaymentUnavailableError("stripe_webhook_not_configured");
     if (!signatureHeader) throw new WebhookVerificationError();
 
-    const parts = Object.fromEntries(
-      signatureHeader.split(",").map((piece) => {
-        const eq = piece.indexOf("=");
-        if (eq <= 0) return ["", ""];
-        return [piece.slice(0, eq).trim(), piece.slice(eq + 1).trim()];
-      })
-    );
-    const timestamp = parts["t"];
-    const v1 = parts["v1"];
-    if (!timestamp || !v1) throw new WebhookVerificationError();
+    const parts = signatureHeader.split(",").map((piece) => {
+      const eq = piece.indexOf("=");
+      if (eq <= 0) return ["", ""] as const;
+      return [piece.slice(0, eq).trim(), piece.slice(eq + 1).trim()] as const;
+    });
+    const timestamp = parts.find(([k]) => k === "t")?.[1];
+    // Stripe sends one v1 per active secret during a rotation; keep them all so a rotation
+    // window cannot reject a legitimate delivery signed with the retired secret.
+    const v1s = parts.filter(([k]) => k === "v1").map(([, v]) => v).filter((v) => v.length > 0);
+    if (!timestamp || v1s.length === 0) throw new WebhookVerificationError();
+
+    // Freshness: the signed timestamp must bound the signature's lifetime, otherwise a
+    // captured (t, v1, body) triple stays replayable forever. Mirrors the Stripe SDK default.
+    // Rejects only *stale* signatures; a small forward skew from Stripe's clock is tolerated.
+    const signedAt = Number(timestamp);
+    if (!Number.isSafeInteger(signedAt)) throw new WebhookVerificationError();
+    if (Math.floor(Date.now() / 1000) - signedAt > WEBHOOK_TOLERANCE_SECONDS) {
+      throw new WebhookVerificationError("timestamp_out_of_tolerance");
+    }
 
     const signedPayload = `${timestamp}.${payload}`;
     const key = await crypto.subtle.importKey(
@@ -116,7 +128,7 @@ class StripePaymentProvider implements PaymentProvider {
     );
     const mac = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedPayload));
     const expected = [...new Uint8Array(mac)].map((b) => b.toString(16).padStart(2, "0")).join("");
-    if (!timingSafeEqualHex(expected, v1)) throw new WebhookVerificationError();
+    if (!v1s.some((v1) => timingSafeEqualHex(expected, v1))) throw new WebhookVerificationError();
 
     let parsed: {
       id?: unknown;
